@@ -9,6 +9,7 @@ dependencies = [
     "numpy>=1.24.0",
     "opencv-python>=4.5.0",
     "pillow>=11.2.1",
+    "pip>=25.3",
     "sam-2",
     "torch>=2.7.0",
     "transformers>=4.51.2",
