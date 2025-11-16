@@ -8,7 +8,7 @@ WORKDIR /app
 
 COPY pyproject.toml pyproject.toml
 COPY uv.lock uv.lock
-RUN uv sync --dev
+RUN --mount=type=cache,target=/root/.cache/ uv sync --dev
 
 COPY . .
 
