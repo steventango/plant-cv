@@ -1,6 +1,14 @@
 # %%
-import tensorflow_datasets as tfds  # TFDS to download MNIST.
-import tensorflow as tf  # TensorFlow / `tf.data` operations.
+from functools import partial
+from typing import Optional
+
+import jax.numpy as jnp
+import matplotlib.pyplot as plt
+import optax
+import tensorflow as tf
+import tensorflow_datasets as tfds
+from flax import nnx
+from IPython.display import clear_output
 
 tf.random.set_seed(0)  # Set the random seed for reproducibility.
 
@@ -30,10 +38,6 @@ train_ds = train_ds.repeat().shuffle(1024)
 train_ds = train_ds.batch(batch_size, drop_remainder=True).take(train_steps).prefetch(1)
 # Group into batches of `batch_size` and skip incomplete batches, prefetch the next sample to improve latency.
 test_ds = test_ds.batch(batch_size, drop_remainder=True).prefetch(1)
-
-from flax import nnx  # The Flax NNX API.
-from functools import partial
-from typing import Optional
 
 
 class CNN(nnx.Module):
@@ -67,12 +71,10 @@ model = CNN(rngs=nnx.Rngs(0))
 nnx.display(model)
 
 # %%
-import jax.numpy as jnp  # JAX NumPy
-
 y = model(jnp.ones((1, 28, 28, 1)), nnx.Rngs(0))
-y
+print(y)
 
-import optax
+# %%
 
 learning_rate = 0.005
 momentum = 0.9
@@ -116,8 +118,6 @@ def eval_step(model: CNN, metrics: nnx.MultiMetric, rngs: nnx.Rngs, batch):
 
 
 # %%
-from IPython.display import clear_output
-import matplotlib.pyplot as plt
 
 metrics_history = {
     "train_loss": [],
