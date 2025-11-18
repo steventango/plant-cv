@@ -1,0 +1,14 @@
+[project]
+name = "pipeline"
+version = "0.1.0"
+description = "Plant CV Pipeline"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "flask>=3.1.0",
+    "pillow>=11.2.1",
+    "numpy>=2.2.1",
+    "opencv-python>=4.10.0",
+    "requests>=2.32.3",
+    "tqdm>=4.66.0",
+]

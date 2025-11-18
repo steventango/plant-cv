@@ -67,6 +67,21 @@ services:
               capabilities:
                 - gpu
 
+  pipeline:
+    build:
+      context: api/pipeline
+      dockerfile: Dockerfile
+    networks:
+      - plant-network
+    restart: unless-stopped
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./api/pipeline:/app
+    depends_on:
+      - grounding-dino
+      - segment-anything
+
 networks:
   plant-network:
     name: plant-network
