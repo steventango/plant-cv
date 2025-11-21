@@ -26,8 +26,8 @@ def encode_image(image_path):
 
 def run_server_proc(port=8000):
     """Run the server in a separate process."""
-    api = SegmentAnythingAPI()
-    server = ls.LitServer(api, max_batch_size=2, batch_timeout=0.01)
+    api = SegmentAnythingAPI(max_batch_size=2, batch_timeout=0.01)
+    server = ls.LitServer(api)
     server.run(port=port, num_api_servers=1, generate_client_file=False)
 
 

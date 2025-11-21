@@ -211,6 +211,6 @@ class SegmentAnythingAPI(ls.LitAPI):
 
 
 if __name__ == "__main__":
-    api = SegmentAnythingAPI()
-    server = ls.LitServer(api, max_batch_size=4, batch_timeout=0.01)
+    api = SegmentAnythingAPI(max_batch_size=4, batch_timeout=0.01)
+    server = ls.LitServer(api)
     server.run(port=8000, num_api_servers=2, generate_client_file=False)
