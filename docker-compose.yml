@@ -37,7 +37,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./api/embeddings:/app
-      - ~/.cache:/root/.cache:cached
+      - ~/.cache:/home/docker/.cache:cached
     deploy:
       resources:
         reservations:
@@ -51,13 +51,14 @@ services:
     build:
       context: api/grounding_dino
       dockerfile: Dockerfile
+    env_file: .env
     networks:
       - plant-network
     privileged: true
     restart: unless-stopped
     volumes:
       - ./api/grounding_dino:/app
-      - ~/.cache:/root/.cache:cached
+      - ~/.cache:/home/docker/.cache:cached
     deploy:
       resources:
         reservations:
@@ -71,13 +72,14 @@ services:
     build:
       context: api/segment_anything
       dockerfile: Dockerfile
+    env_file: .env
     networks:
       - plant-network
     privileged: true
     restart: unless-stopped
     volumes:
       - ./api/segment_anything:/app
-      - ~/.cache:/root/.cache:cached
+      - ~/.cache:/home/docker/.cache:cached
     deploy:
       resources:
         reservations:
