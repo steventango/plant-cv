@@ -26,6 +26,26 @@ services:
               capabilities:
                 - gpu
 
+  embeddings:
+    build:
+      context: api/embeddings
+      dockerfile: Dockerfile
+    env_file: .env
+    networks:
+      - plant-network
+    privileged: true
+    restart: unless-stopped
+    volumes:
+      - ./api/embeddings:/app
+      - ~/.cache:/root/.cache:cached
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities:
+                - gpu
 
   grounding-dino:
     build:
@@ -79,6 +99,7 @@ services:
     volumes:
       - ./api/pipeline:/app
     depends_on:
+      - embeddings
       - grounding-dino
       - segment-anything
 
