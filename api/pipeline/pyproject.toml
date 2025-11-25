@@ -5,11 +5,17 @@ description = "Plant CV Pipeline"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "altair>=5.0,<6.0",
     "flask>=3.1.0",
     "pillow>=11.2.1",
     "numpy>=2.2.1",
     "opencv-python>=4.10.0",
+    "pandas>=2.0.0",
+    "plantcv>=4.0.0",
     "requests>=2.32.3",
+    "scikit-image>=0.22.0",
+    "supervision>=0.26.1",
     "tqdm>=4.66.0",
+    "moviepy>=1.0.0",
     "pytest>=8.0.0",
 ]

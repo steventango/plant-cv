@@ -7,8 +7,11 @@ import requests
 from PIL import Image
 
 
-def encode_image(image: Image.Image) -> str:
+def encode_image(image: Image.Image | np.ndarray) -> str:
     """Encode image to base64 string."""
+    if isinstance(image, np.ndarray):
+        image = Image.fromarray(image)
+    
     buf = io.BytesIO()
     image.save(buf, format="JPEG")
     img_str = base64.b64encode(buf.getvalue()).decode("utf-8")

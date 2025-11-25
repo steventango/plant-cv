@@ -79,7 +79,7 @@ def test_pipeline_flow(test_image, output_dir):
         "visualize": True,
     }
     resp = requests.post(f"{BASE_URL}/pot/detect", json=detect_payload)
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     detect_result = resp.json()
 
     boxes = detect_result["boxes"]
@@ -141,3 +141,76 @@ def test_pipeline_flow(test_image, output_dir):
         if warped:
             img = decode_image(warped)
             save_image(img, output_dir / f"{test_image.stem}_warp_{i:02d}.jpg")
+
+    # 5. Plant Detect and Segment
+    print("Testing plant/detect and plant/segment on first warped image")
+    # Find first valid warped image
+    first_warped = next((w for w in warped_images if w is not None), None)
+    if first_warped:
+        # 5a. Detect
+        plant_detect_payload = {
+            "image_data": first_warped,
+            "visualize": True,
+            "text_prompt": "plant",
+        }
+        resp = requests.post(f"{BASE_URL}/plant/detect", json=plant_detect_payload)
+        assert resp.status_code == 200
+        detect_result = resp.json()
+
+        boxes = detect_result["boxes"]
+
+        if "visualization" in detect_result:
+            vis_image = decode_image(detect_result["visualization"])
+            save_image(vis_image, output_dir / f"{test_image.stem}_plant_detect.jpg")
+
+        if len(boxes) > 0:
+            # 5b. Segment
+            plant_segment_payload = {
+                "image_data": first_warped,
+                "boxes": boxes,
+                "visualize": True,
+            }
+            resp = requests.post(
+                f"{BASE_URL}/plant/segment", json=plant_segment_payload
+            )
+            assert resp.status_code == 200
+            segment_result = resp.json()
+
+            if segment_result["success"]:
+                assert "mask" in segment_result
+
+                if "visualization" in segment_result:
+                    vis_image = decode_image(segment_result["visualization"])
+                    save_image(
+                        vis_image, output_dir / f"{test_image.stem}_plant_segment.jpg"
+                    )
+
+                # 6. Plant Stats
+                print("Testing plant/stats on first warped image")
+                stats_payload = {
+                    "warped_image": first_warped,
+                    "mask": segment_result["mask"],
+                    "pot_size_mm": 60.0,
+                    "margin": 0.25,
+                    "visualize": True,
+                }
+                resp = requests.post(f"{BASE_URL}/plant/stats", json=stats_payload)
+                assert resp.status_code == 200, resp.text
+                stats_result = resp.json()
+
+                assert "stats" in stats_result
+                stats = stats_result["stats"]
+                assert "area" in stats
+                assert "width" in stats
+                assert "height" in stats
+
+                if "visualization" in stats_result:
+                    vis_image = decode_image(stats_result["visualization"])
+                    save_image(
+                        vis_image, output_dir / f"{test_image.stem}_plant_stats.jpg"
+                    )
+
+            else:
+                print(f"Plant segmentation failed: {segment_result.get('note')}")
+        else:
+            print("No plants detected (expected if crop is empty)")
