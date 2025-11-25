@@ -8,7 +8,7 @@ from flask import Flask, jsonify, request
 from PIL import Image
 from pot.detect import detect_pots
 from pot.quad import compute_quadrilaterals
-from pot.segment import segment_pot_boxes
+from utils import call_segment_anything_api
 from pot.warp import warp_pots
 
 app = Flask(__name__)
@@ -131,7 +131,7 @@ def segment():
         boxes = np.array(data["boxes"])
         visualize = data.get("visualize", False)
 
-        masks, scores = segment_pot_boxes(image, boxes)
+        masks, scores = call_segment_anything_api(image, boxes)
 
         # Encode masks as base64 numpy array
         # TODO: maybe return contours instead
