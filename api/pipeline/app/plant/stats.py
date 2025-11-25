@@ -68,7 +68,7 @@ def analyze_plant_mask(
 
     # Set PlantCV parameters
     pcv.params.line_thickness = 2
-    pcv.params.debug = "print" if visualize else None
+    pcv.params.debug = None
 
     # Clear previous observations
     pcv.outputs.clear()
