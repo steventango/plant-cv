@@ -1,47 +1,6 @@
 import numpy as np
-import requests
 from PIL import Image
-
-from .utils import encode_image
-
-# TODO: move to utils
-def call_grounding_dino_api(
-    image: Image.Image,
-    text_prompt: str,
-    threshold: float = 0.05,
-    text_threshold: float = 0.05,
-    server_url: str = "http://grounding-dino:8000/predict",
-):
-    """
-    Call the Grounding DINO API with an image and text prompt.
-
-    Args:
-        image: PIL Image to be processed
-        text_prompt: Text prompt for object detection
-        threshold: Confidence threshold for boxes
-        text_threshold: Text threshold
-        server_url: URL of the Grounding DINO API server
-
-    Returns:
-        boxes: Numpy array of boxes in format [x1, y1, x2, y2]
-        scores: Numpy array of confidence scores
-        text_labels: List of detected class names
-    """
-    payload = {
-        "image_data": encode_image(image),
-        "text_prompt": text_prompt,
-        "threshold": threshold,
-        "text_threshold": text_threshold,
-    }
-
-    response = requests.post(server_url, json=payload)
-    response.raise_for_status()
-    result = response.json()
-    boxes = np.array(result["boxes"])
-    scores = np.array(result["scores"])
-    text_labels = result["text_labels"]
-
-    return boxes, scores, text_labels
+from ..utils import call_grounding_dino_api
 
 
 def detect_pots(image, text_prompt="pot", threshold=0.03, text_threshold=0):

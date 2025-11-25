@@ -3,7 +3,7 @@ import numpy as np
 import requests
 from PIL import Image
 
-from .utils import encode_image
+from ..utils import encode_image
 
 
 def contours_to_masks(contours: list[list[list[int]]], image_size: tuple[int, int]):
