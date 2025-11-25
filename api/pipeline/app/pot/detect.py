@@ -4,7 +4,7 @@ from PIL import Image
 
 from .utils import encode_image
 
-
+# TODO: move to utils
 def call_grounding_dino_api(
     image: Image.Image,
     text_prompt: str,
@@ -42,163 +42,6 @@ def call_grounding_dino_api(
     text_labels = result["text_labels"]
 
     return boxes, scores, text_labels
-
-
-# def _infer_grid(n: int, target_aspect: float = 2.0) -> tuple[int, int]:
-#     """Infer (rows, cols) from tile count using factor pairs.
-
-#     - If n is a perfect square, prefer square (sqrt x sqrt).
-#     - Else choose factor pair (r,c), r<=c, that minimizes |c/r - target_aspect|.
-#     - Fallback: (rows, cols) = (int(sqrt(n)), ceil(n/rows)).
-#     """
-#     if n <= 0:
-#         return (1, 1)
-#     r0 = int(np.floor(np.sqrt(n)))
-#     if r0 * r0 == n:
-#         return (r0, r0)
-#     pairs: list[tuple[int, int]] = []
-#     for r in range(1, r0 + 1):
-#         if n % r == 0:
-#             pairs.append((r, n // r))
-#     if pairs:
-#         best = min(pairs, key=lambda rc: abs(rc[1] / rc[0] - float(target_aspect)))
-#         return best
-#     # Fallback if no factor pairs found (shouldn't happen): near-square grid
-#     rows = max(1, r0)
-#     cols = int(np.ceil(n / rows))
-#     return rows, cols
-
-
-# def _kmeans_1d(
-#     values: np.ndarray, k: int, iters: int = 20
-# ) -> tuple[np.ndarray, np.ndarray]:
-#     """Simple 1D k-means clustering.
-
-#     Returns (labels, centers) with centers sorted ascending and labels remapped accordingly.
-#     """
-#     v = np.asarray(values, dtype=float).ravel()
-#     n = v.size
-#     if n == 0 or k <= 1:
-#         return np.zeros(n, dtype=int), np.array([np.mean(v)] if n > 0 else [0.0])
-#     k = int(max(1, min(int(k), n)))
-#     vmin, vmax = float(v.min()), float(v.max())
-#     if vmax - vmin <= 1e-9:
-#         return np.zeros(n, dtype=int), np.array([np.mean(v)])
-#     # Initialize centers at quantiles
-#     qs = np.linspace(0.0, 1.0, k, endpoint=False) + 0.5 / k
-#     centers = np.quantile(v, np.clip(qs, 0.0, 1.0))
-#     labels = np.zeros(n, dtype=int)
-#     for _ in range(max(1, int(iters))):
-#         # Assign
-#         d = np.abs(v[:, None] - centers[None, :])
-#         new_labels = np.argmin(d, axis=1)
-#         if np.array_equal(new_labels, labels):
-#             break
-#         labels = new_labels
-#         # Update
-#         for i in range(k):
-#             mask = labels == i
-#             if mask.any():
-#                 centers[i] = v[mask].mean()
-#     # Sort centers and remap labels
-#     order = np.argsort(centers)
-#     inv = np.zeros_like(order)
-#     inv[order] = np.arange(order.size)
-#     centers = centers[order]
-#     labels = inv[labels]
-#     return labels.astype(int, copy=False), centers.astype(float, copy=False)
-
-
-# def compute_row_major_grid_order(xyxy: np.ndarray, major: str = "row") -> np.ndarray:
-#     """Compute a perspective-robust grid ordering for tray-like layouts.
-
-#     Args:
-#         xyxy: (N,4) boxes.
-#         major: "row" (default) for row-major, "col" for column-major.
-
-#     Method:
-#         - Estimates grid axes via PCA on box centers
-#         - Orients axes to align monotonically with image x/y via correlation
-#         - Infers (rows, cols) from count and PCA aspect ratio
-#         - Clusters along the major axis (1D k-means) to assign major indices
-#         - Orders lexicographically: major index, then minor axis position
-#     """
-#     boxes = np.asarray(xyxy, dtype=float)
-#     n = boxes.shape[0]
-#     if n <= 1:
-#         return np.arange(n, dtype=int)
-
-#     cx = (boxes[:, 0] + boxes[:, 2]) / 2.0
-#     cy = (boxes[:, 1] + boxes[:, 3]) / 2.0
-#     P = np.stack([cx, cy], axis=1)
-
-#     # PCA via SVD on centered points
-#     mean = P.mean(axis=0)
-#     Q = P - mean
-#     try:
-#         _, _, Vt = np.linalg.svd(Q, full_matrices=False)
-#         v0 = Vt[0, :]
-#         v1 = Vt[1, :]
-#     except Exception:
-#         # Fallback to simple y, then x
-#         return np.lexsort((boxes[:, 0], boxes[:, 1]))
-
-#     # Projections along PCA axes
-#     s = Q @ v0
-#     t = Q @ v1
-
-#     def _safe_corr(a: np.ndarray, b: np.ndarray) -> float:
-#         try:
-#             a_std = np.std(a)
-#             b_std = np.std(b)
-#             if a_std < 1e-9 or b_std < 1e-9:
-#                 return 0.0
-#             return float(np.corrcoef(a, b)[0, 1])
-#         except Exception:
-#             return 0.0
-
-#     # Decide which axis is x-like (columns) vs y-like (rows) by correlation magnitude
-#     corr_x_s = abs(_safe_corr(s, cx))
-#     corr_x_t = abs(_safe_corr(t, cx))
-#     if corr_x_s >= corr_x_t:
-#         u = s  # x-like (left→right)
-#         v = t  # y-like (top→bottom)
-#     else:
-#         u = t
-#         v = s
-
-#     # Orient u to increase with x and v to increase with y
-#     if _safe_corr(u, cx) < 0:
-#         u = -u
-#     if _safe_corr(v, cy) < 0:
-#         v = -v
-
-#     # Estimate grid shape from aspect in PCA space
-#     range_s = float(u.max() - u.min())
-#     range_t = float(v.max() - v.min())
-#     aspect = (range_s / (range_t + 1e-9)) if range_t > 1e-9 else 10.0
-#     rows, cols = _infer_grid(n=int(n), target_aspect=float(max(0.5, min(5.0, aspect))))
-
-#     major = (major or "row").lower()
-#     if major == "col":
-#         # Cluster columns along u (left→right)
-#         col_labels, col_centers = _kmeans_1d(u, max(1, cols))
-#         col_order = np.argsort(col_centers)  # left to right
-#         col_map = np.zeros_like(col_order)
-#         col_map[col_order] = np.arange(col_order.size)
-#         col_idx = col_map[col_labels]
-#         # Within each column, sort by v (top→bottom)
-#         order = np.lexsort((v, col_idx))
-#     else:
-#         # Row-major (default): cluster rows along v (top→bottom)
-#         row_labels, row_centers = _kmeans_1d(v, max(1, rows))
-#         row_order = np.argsort(row_centers)  # top to bottom
-#         row_map = np.zeros_like(row_order)
-#         row_map[row_order] = np.arange(row_order.size)
-#         row_idx = row_map[row_labels]
-#         # Within each row, sort by u (left→right)
-#         order = np.lexsort((u, row_idx))
-#     return order.astype(int, copy=False)
 
 
 def detect_pots(image, text_prompt="pot", threshold=0.03, text_threshold=0):
@@ -341,8 +184,6 @@ def detect_pots(image, text_prompt="pot", threshold=0.03, text_threshold=0):
                 class_names = class_names[kept]
 
     if len(boxes) > 0:
-        # Apply perspective-aware row-major ordering
-        # order = compute_row_major_grid_order(boxes, major="row")
         xs = (boxes[:, 0] + boxes[:, 2]) / 2
         ys = (boxes[:, 1] + boxes[:, 3]) / 2
         order = np.lexsort((xs, ys))
