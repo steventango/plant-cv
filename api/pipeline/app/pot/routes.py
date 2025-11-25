@@ -1,21 +1,23 @@
 import base64
 import io
 
-import cv2
 import numpy as np
-import supervision as sv
 from flask import Blueprint, jsonify, request
-
+from utils import call_segment_anything_api, decode_image, encode_image
 
 from pot.detect import detect_pots
 from pot.quad import compute_quadrilaterals
 from pot.warp import warp_pots
-from utils import call_segment_anything_api, decode_image, encode_image
+from pot.visualization import (
+    visualize_pot_detections,
+    visualize_pot_segmentation,
+    visualize_quadrilaterals,
+)
 
-pot_bp = Blueprint("pot", __name__, url_prefix="/pot")
+pot_blueprint = Blueprint("pot", __name__, url_prefix="/pot")
 
 
-@pot_bp.route("/detect", methods=["POST"])
+@pot_blueprint.route("/detect", methods=["POST"])
 def detect():
     """
     Detect pot boxes in an image.
@@ -57,29 +59,7 @@ def detect():
 
         if visualize and len(boxes) > 0:
             image_np = np.array(image)
-
-            ids = np.arange(len(boxes), dtype=int)
-            # Create supervision detections
-            detections = sv.Detections(
-                xyxy=boxes,
-                confidence=confidences,
-                class_id=ids,
-                tracker_id=ids,
-            )
-
-            # Annotate with boxes
-            box_annotator = sv.BoxAnnotator()
-            annotated = box_annotator.annotate(
-                scene=image_np.copy(), detections=detections
-            )
-
-            # Annotate with labels (ID and confidence)
-            label_annotator = sv.LabelAnnotator()
-            labels = [f"#{tid} {conf:.2f}" for tid, conf in zip(ids, confidences)]
-            annotated = label_annotator.annotate(
-                scene=annotated, detections=detections, labels=labels
-            )
-
+            annotated = visualize_pot_detections(image_np, boxes, confidences)
             response["visualization"] = encode_image(annotated)
 
         return jsonify(response)
@@ -87,7 +67,7 @@ def detect():
         return jsonify({"error": str(e)}), 500
 
 
-@pot_bp.route("/segment", methods=["POST"])
+@pot_blueprint.route("/segment", methods=["POST"])
 def segment():
     """
     Segment pot boxes in an image.
@@ -126,24 +106,8 @@ def segment():
         }
 
         if visualize and len(masks) > 0:
-            # TODO: move visualization code to the appropriate place
             image_np = np.array(image)
-
-            # Create supervision detections with masks
-            detections = sv.Detections(
-                xyxy=boxes, mask=masks.astype(bool), class_id=np.arange(len(masks))
-            )
-
-            # Annotate with masks
-            mask_annotator = sv.MaskAnnotator()
-            annotated = mask_annotator.annotate(
-                scene=image_np.copy(), detections=detections
-            )
-
-            # Add boxes on top
-            box_annotator = sv.BoxAnnotator()
-            annotated = box_annotator.annotate(scene=annotated, detections=detections)
-
+            annotated = visualize_pot_segmentation(image_np, boxes, masks)
             response["visualization"] = encode_image(annotated)
 
         return jsonify(response)
@@ -151,7 +115,7 @@ def segment():
         return jsonify({"error": str(e)}), 500
 
 
-@pot_bp.route("/quad", methods=["POST"])
+@pot_blueprint.route("/quad", methods=["POST"])
 def quad():
     """
     Compute quadrilaterals from masks.
@@ -187,31 +151,15 @@ def quad():
         if visualize and data.get("image_data"):
             image = decode_image(data["image_data"])
             image_np = np.array(image)
-
-            # Draw quadrilaterals
-            for i, quad in enumerate(quads):
-                if quad is not None:
-                    quad_int = quad.astype(np.int32).reshape((-1, 1, 2))
-                    # Use yellow for quads
-                    cv2.polylines(
-                        image_np,
-                        [quad_int],
-                        isClosed=True,
-                        color=(0, 255, 255),
-                        thickness=3,
-                    )
-                    # Add corner markers
-                    for pt in quad:
-                        cv2.circle(image_np, tuple(pt.astype(int)), 5, (0, 255, 0), -1)
-
-            response["visualization"] = encode_image(image_np)
+            annotated = visualize_quadrilaterals(image_np, quads)
+            response["visualization"] = encode_image(annotated)
 
         return jsonify(response)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-@pot_bp.route("/warp", methods=["POST"])
+@pot_blueprint.route("/warp", methods=["POST"])
 def warp():
     """
     Warp pot regions to square images.
