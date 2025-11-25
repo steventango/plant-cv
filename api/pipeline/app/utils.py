@@ -15,6 +15,12 @@ def encode_image(image: Image.Image) -> str:
     return img_str
 
 
+def decode_image(image_data: str) -> Image.Image:
+    """Decode base64 image to PIL Image."""
+    image_bytes = base64.b64decode(image_data)
+    return Image.open(io.BytesIO(image_bytes)).convert("RGB")
+
+
 def call_grounding_dino_api(
     image: Image.Image,
     text_prompt: str,
