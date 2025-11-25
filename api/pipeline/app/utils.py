@@ -49,7 +49,7 @@ def call_grounding_dino_api(
     result = response.json()
     boxes = np.array(result["boxes"])
     scores = np.array(result["scores"])
-    text_labels = result["text_labels"]
+    text_labels = np.array(result["text_labels"])
 
     return boxes, scores, text_labels
 
