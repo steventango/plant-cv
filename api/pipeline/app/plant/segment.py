@@ -1,4 +1,69 @@
+import cv2
 import numpy as np
+from plantcv import plantcv as pcv
+from skimage.exposure import equalize_adapthist
+from skimage.filters import threshold_otsu
+
+
+def refine_mask_with_otsu(
+    image_rgb: np.ndarray,
+    mask: np.ndarray,
+    pot_width_px: int = None,
+) -> np.ndarray:
+    """
+    Refine a binary mask using Otsu thresholding on the equalized grayscale image.
+    This helps to better separate the plant from the background within the SAM mask.
+
+    Args:
+        image_rgb: RGB image as numpy array (H, W, 3)
+        mask: Binary mask as numpy array (H, W)
+        pot_width_px: Approximate width of the pot in pixels (for kernel size).
+                      If None, defaults to 1/5 of image width.
+
+    Returns:
+        Refined binary mask (H, W)
+    """
+    if not np.any(mask):
+        return mask
+
+    # Convert to grayscale
+    gray_image = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
+
+    # Determine kernel size for adaptive equalization
+    if pot_width_px is None:
+        pot_width_px = max(int(image_rgb.shape[1] / 5), 1)
+
+    # Equalize histogram
+    # Note: equalize_adapthist expects float [0, 1] or uint8, returns float [0, 1]
+    equalized = equalize_adapthist(
+        gray_image, kernel_size=pot_width_px, clip_limit=0.01
+    )
+    equalized_uint8 = (equalized * 255).astype(np.uint8)
+
+    # Calculate Otsu threshold only on pixels within the initial mask
+    masked_pixels = equalized_uint8[mask > 0]
+    if masked_pixels.size == 0:
+        return mask
+
+    # Reshape for threshold_otsu
+    try:
+        otsu_thresh = threshold_otsu(masked_pixels.reshape((1, -1)))
+    except ValueError:
+        # If all pixels have same intensity, Otsu fails
+        return mask
+
+    # Create binary mask from threshold
+    refined_mask_pcv = pcv.threshold.binary(
+        equalized_uint8, threshold=otsu_thresh, object_type="light"
+    )
+
+    # PlantCV returns 0/255 image, convert to boolean
+    refined_mask_bool = refined_mask_pcv > 0
+
+    # Intersect with original mask
+    final_mask = mask & refined_mask_bool
+
+    return final_mask.astype(np.uint8) * 255
 
 
 def filter_masks_by_area(

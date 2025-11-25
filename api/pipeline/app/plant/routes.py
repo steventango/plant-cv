@@ -6,9 +6,16 @@ from flask import Blueprint, jsonify, request
 from utils import call_segment_anything_api, decode_image, encode_image
 
 from plant.detect import detect_plant, filter_boxes_by_area
-from plant.segment import filter_masks_by_area, select_best_mask
+from plant.segment import (
+    filter_masks_by_area,
+    refine_mask_with_otsu,
+    select_best_mask,
+)
 from plant.stats import analyze_plant_mask
-from plant.visualization import visualize_plant_detections, visualize_plant_segmentation
+from plant.visualization import (
+    visualize_plant_detections,
+    visualize_plant_segmentation,
+)
 
 plant_blueprint = Blueprint("plant", __name__, url_prefix="/plant")
 
@@ -176,6 +183,10 @@ def plant_segment():
         # Step 4: Prepare result
         best_mask = masks[best_idx_original]
         mask_binary = (best_mask > 0).astype(np.uint8) * 255
+
+        # Refine mask with Otsu thresholding
+        mask_binary = refine_mask_with_otsu(crop_np, mask_binary)
+
         best_mask_score = (
             float(scores[best_idx_original])
             if len(scores) > best_idx_original
