@@ -3,14 +3,13 @@ from PIL import Image
 from utils import call_grounding_dino_api
 
 
-def filter_by_aspect_ratio(boxes):
-    # Filter by aspect ratio (0.5 to 2.0)
+def filter_by_aspect_ratio(boxes, ratio: float = 3 / 2):
     widths = np.clip(boxes[:, 2] - boxes[:, 0], a_min=0, a_max=None)
     heights = np.clip(boxes[:, 3] - boxes[:, 1], a_min=0, a_max=None)
 
     with np.errstate(divide="ignore", invalid="ignore"):
         aspect = widths / np.maximum(heights, 1e-6)
-    ar_mask = ((aspect >= 0.5) & (aspect <= 2.0)).astype(bool)
+    ar_mask = ((aspect >= 1 / ratio) & (aspect <= ratio)).astype(bool)
     return ar_mask
 
 
@@ -43,14 +42,25 @@ def filter_by_areas(boxes, areas, image_np):
     return inlier_mask
 
 
-def filter_by_confidence(confidences, threshold):
-    # Filter by confidence (remove low-confidence outliers)
-    if len(confidences) >= 2:
-        q1_conf, q3_conf = np.percentile(confidences, [25, 75])
-        iqr_conf = q3_conf - q1_conf
-        conf_lo_thresh = max(q1_conf - 1.5 * iqr_conf, threshold)
+def filter_by_confidence(confidences):
+    gap = 0.1
+    # Filter by confidence - find first gap >= 0.05 between sorted confidences
+    conf_mask = np.ones(len(confidences), dtype=bool)  # Initialize to keep all
 
-    conf_mask = (confidences >= conf_lo_thresh).astype(bool)
+    if len(confidences) >= 2:
+        sorted_confidences = np.sort(confidences)
+        # Calculate gaps between consecutive sorted confidences
+        gaps = np.diff(sorted_confidences)
+
+        # Find the first gap >= gap
+        gap_indices = np.where(gaps >= gap)[0]
+
+        if len(gap_indices) > 0:
+            # Set threshold to the confidence value after the first large gap
+            first_gap_idx = gap_indices[0]
+            threshold = sorted_confidences[first_gap_idx + 1]
+            conf_mask = (confidences >= threshold).astype(bool)
+
     if not conf_mask.any():
         # Fallback: keep highest confidence box
         best_idx = int(np.argmax(confidences))
@@ -143,7 +153,7 @@ def detect_pots(image, text_prompt="pot", threshold=0.03, text_threshold=0):
         else class_names
     )
 
-    conf_mask = filter_by_confidence(confidences, threshold)
+    conf_mask = filter_by_confidence(confidences)
     boxes = boxes[conf_mask]
     confidences = confidences[conf_mask]
     class_names = (
