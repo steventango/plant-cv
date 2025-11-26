@@ -43,39 +43,6 @@ def visualize_plant_segmentation(
     """
     annotated = image_np.copy()
 
-    # Case 1: Visualization for rejected masks (when no valid mask found)
-    if best_idx is None and reason_codes:
-        mask_detections = sv.Detections(
-            xyxy=boxes,
-            confidence=confidences,
-            class_id=np.arange(len(boxes), dtype=int),
-        )
-        mask_detections.mask = masks.astype(bool)
-
-        # Mark invalid masks
-        for idx, code in reason_codes.items():
-            mask_detections.class_id[idx] = code
-
-        mask_annotator = sv.MaskAnnotator()
-        annotated = mask_annotator.annotate(scene=annotated, detections=mask_detections)
-        return annotated
-
-    # Case 2: Visualization for successful selection
-    # 1. Annotate others (Gray)
-    other_indices = [i for i in range(len(masks)) if i != best_idx]
-    if other_indices:
-        other_detections = sv.Detections(
-            xyxy=boxes[other_indices],
-            confidence=confidences[other_indices],
-            class_id=np.array(other_indices),
-        )
-        other_detections.mask = masks[other_indices].astype(bool)
-
-        mask_annotator_gray = sv.MaskAnnotator(color=sv.Color(r=128, g=128, b=128))
-        annotated = mask_annotator_gray.annotate(
-            scene=annotated, detections=other_detections
-        )
-
     # 2. Annotate selected (Green)
     selected_detection = sv.Detections(
         xyxy=boxes[[best_idx]],
@@ -89,20 +56,10 @@ def visualize_plant_segmentation(
         scene=annotated, detections=selected_detection
     )
 
-    # 3. Add labels
-    all_detections = sv.Detections(
-        xyxy=boxes,
-        confidence=confidences,
-        class_id=np.arange(len(boxes), dtype=int),
-    )
-
     label_annotator = sv.LabelAnnotator()
-    labels = [
-        f"#{i} {conf:.2f}{' *' if i == best_idx else ''}"
-        for i, conf in enumerate(confidences)
-    ]
+    labels = [f"#{best_idx} {confidences[best_idx]:.2f}"]
     annotated = label_annotator.annotate(
-        scene=annotated, detections=all_detections, labels=labels
+        scene=annotated, detections=selected_detection, labels=labels
     )
 
     return annotated
