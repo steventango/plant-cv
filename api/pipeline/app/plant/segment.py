@@ -154,12 +154,13 @@ def select_best_mask(
     if valid_indices is None:
         valid_indices = np.arange(len(masks), dtype=int)
     elif len(valid_indices) == 0:
-        return None, np.array([])
+        return None, 0.0
 
     H, W = image_shape[:2]
     center_x = W / 2.0
     center_y = H / 2.0
-    sigma = min(W, H) * 0.6
+    # The crop width W is 1.5 * pot_width, so sigma should be equal to W.
+    sigma = min(W, H)
 
     valid_boxes = boxes[valid_indices]
     valid_confidences = confidences[valid_indices].copy()
@@ -172,9 +173,26 @@ def select_best_mask(
         -((center_x - box_centers_x) ** 2 + (center_y - box_centers_y) ** 2)
         / (sigma / 2) ** 2
     )
+    logger.info(f"Center score: {center_score}")
 
-    combined_scores = valid_confidences * center_score
+    mask_areas = np.array([np.sum(mask > 0) for mask in masks[valid_indices]], dtype=float)
+    box_widths = valid_boxes[:, 2] - valid_boxes[:, 0]
+    box_heights = valid_boxes[:, 3] - valid_boxes[:, 1]
+    box_areas = box_widths * box_heights
+
+    # AREA ratio score: mask to box areas
+    area_ratio_score = mask_areas / box_areas
+    # Penalize high area ratios
+    area_ratio_score = 1 - np.clip(area_ratio_score, 0.0, 1.0)
+    area_ratio_score[area_ratio_score > 0.4] = 1
+    logger.info(f"Area ratio score: {area_ratio_score}")
+
+    combined_scores = valid_confidences * center_score * area_ratio_score
+    logger.info(f"Combined scores: {combined_scores}")
+    combined_scores = np.exp(combined_scores) / np.sum(np.exp(combined_scores))
+    
     best_relative_idx = int(np.argmax(combined_scores))
     best_idx_original = int(valid_indices[int(best_relative_idx)])
+    best_score = combined_scores[best_relative_idx]
 
-    return best_idx_original, combined_scores
+    return best_idx_original, best_score
