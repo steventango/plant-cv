@@ -50,9 +50,10 @@ def plant_detect():
         crop_shape = crop_np.shape[:2]
 
         text_prompt = data.get("text_prompt", "plant")
-        detection_threshold = data.get("detection_threshold", 0.05)
-        detection_text_threshold = data.get("detection_text_threshold", 0.05)
+        detection_threshold = data.get("detection_threshold", 0.21)
+        detection_text_threshold = data.get("detection_text_threshold", 0.0)
         area_ratio_threshold = data.get("area_ratio_threshold", 0.90)
+        aspect_ratio_threshold = data.get("aspect_ratio_threshold", 2)
         visualize = data.get("visualize", False)
 
         # Step 1: Detect plants
