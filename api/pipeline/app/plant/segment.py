@@ -108,17 +108,12 @@ def filter_masks_by_area(
 
     # Compute filters
     near_full_mask = (area_ratios > near_full_threshold).astype(bool)
-    median_area = float(np.median(mask_areas)) if mask_areas.size else 0.0
-    too_big_vs_median = (
-        (median_area > 0.0) & (mask_areas > median_multiplier * median_area)
-    ).astype(bool)
-
-    valid_mask = ((~near_full_mask) & (~too_big_vs_median)).astype(bool)
+    valid_mask = (~near_full_mask).astype(bool)
 
     # Map reason codes
     reason_codes = {}
     for idx in range(len(masks)):
-        if near_full_mask[idx] or too_big_vs_median[idx]:
+        if near_full_mask[idx]:
             reason_codes[idx] = 902  # too large
 
     valid_indices = np.where(valid_mask)[0]
