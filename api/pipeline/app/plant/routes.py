@@ -148,6 +148,7 @@ def plant_segment():
         )
 
         # Step 3: Select best mask
+        best_combined_score = None
         if len(valid_indices) == 0:
             # Fallback: keep largest non-full-size mask
             non_full_idx = [i for i in range(len(masks)) if i not in reason_codes]
@@ -176,9 +177,11 @@ def plant_segment():
 
                 return jsonify(result)
         else:
-            best_idx_original, combined_scores = select_best_mask(
+            best_idx_original, best_combined_score = select_best_mask(
                 masks, confidences, boxes, crop_shape, valid_indices
             )
+            best_combined_score = float(best_combined_score)
+            logger.info(f"Best combined score: {best_combined_score}")
 
         # Step 4: Prepare result
         best_mask = masks[best_idx_original]
@@ -201,6 +204,7 @@ def plant_segment():
         result["success"] = True
         result["mask"] = mask_b64
         result["mask_score"] = best_mask_score
+        result["combined_score"] = best_combined_score
         result["selected_index"] = int(best_idx_original)
 
         if visualize:
@@ -210,6 +214,7 @@ def plant_segment():
                 confidences,
                 masks,
                 best_idx=best_idx_original,
+                combined_score=best_combined_score,
             )
             result["visualization"] = encode_image(annotated)
 

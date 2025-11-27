@@ -35,6 +35,7 @@ def visualize_plant_segmentation(
     masks: np.ndarray,
     best_idx: int,
     reason_codes: dict = None,
+    combined_score: float = None,
 ) -> np.ndarray:
     """
     Visualize plant segmentation results.
@@ -43,23 +44,27 @@ def visualize_plant_segmentation(
     """
     annotated = image_np.copy()
 
-    # 2. Annotate selected (Green)
-    selected_detection = sv.Detections(
-        xyxy=boxes[[best_idx]],
-        confidence=confidences[[best_idx]],
-        class_id=np.array([best_idx]),
-    )
-    selected_detection.mask = masks[[best_idx]].astype(bool)
+    if best_idx is not None:
+        # 2. Annotate selected (Green)
+        selected_detection = sv.Detections(
+            xyxy=boxes[[best_idx]],
+            confidence=confidences[[best_idx]],
+            class_id=np.array([best_idx]),
+        )
+        selected_detection.mask = masks[[best_idx]].astype(bool)
 
-    mask_annotator_green = sv.MaskAnnotator(color=sv.Color(r=0, g=255, b=0))
-    annotated = mask_annotator_green.annotate(
-        scene=annotated, detections=selected_detection
-    )
+        mask_annotator_green = sv.MaskAnnotator(color=sv.Color(r=0, g=255, b=0))
+        annotated = mask_annotator_green.annotate(
+            scene=annotated, detections=selected_detection
+        )
 
-    label_annotator = sv.LabelAnnotator()
-    labels = [f"#{best_idx} {confidences[best_idx]:.2f}"]
-    annotated = label_annotator.annotate(
-        scene=annotated, detections=selected_detection, labels=labels
-    )
+        label_annotator = sv.LabelAnnotator()
+        label = f"#{best_idx} {confidences[best_idx]:.2f}"
+        if combined_score is not None:
+            label += f" | {combined_score:.2f}"
+        labels = [label]
+        annotated = label_annotator.annotate(
+            scene=annotated, detections=selected_detection, labels=labels
+        )
 
     return annotated
