@@ -5,7 +5,7 @@ import numpy as np
 from flask import Blueprint, jsonify, request
 from utils import call_segment_anything_api, decode_image, encode_image
 
-from plant.detect import detect_plant, filter_boxes_by_area
+from plant.detect import detect_plant, filter_boxes_by_area, filter_boxes_by_aspect_ratio, select_top_boxes
 from plant.segment import (
     filter_masks_by_area,
     refine_mask_with_otsu,
@@ -75,6 +75,10 @@ def plant_detect():
                 boxes, confidences, class_names, crop_shape, aspect_ratio_threshold
             )
 
+        # Step 4: Keep k-most confident boxes
+        boxes, confidences, class_names = select_top_boxes(
+            boxes, confidences, class_names, crop_shape, k=5
+        )
 
         response = {
             "boxes": boxes.tolist(),

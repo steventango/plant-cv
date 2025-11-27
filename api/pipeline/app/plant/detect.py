@@ -100,3 +100,38 @@ def filter_boxes_by_aspect_ratio(
     filtered_class_names = class_names[valid_masks]
 
     return filtered_boxes, filtered_confidences, filtered_class_names, valid_masks
+
+def select_top_boxes(
+    boxes: np.ndarray,
+    confidences: np.ndarray,
+    class_names: list[str] | np.ndarray,
+    image_shape: tuple[int, int],
+    k: int = 5,
+):
+    """
+    Select top k boxes based on a heuristic score (Confidence * (1 - Area_Ratio)).
+    This penalizes very large boxes (like the pot itself) in favor of smaller plant boxes.
+
+    Args:
+        boxes: Numpy array of boxes [x1, y1, x2, y2]
+        confidences: Numpy array of confidence scores
+        class_names: List or array of class names
+        image_shape: Tuple (H, W) of image shape
+        k: Number of boxes to keep
+
+    Returns:
+        selected_boxes, selected_confidences, selected_class_names
+    """
+    if len(boxes) <= k:
+        return boxes, confidences, class_names
+
+    H, W = image_shape[:2]
+
+    sorted_indices = np.argsort(confidences)[::-1]
+    top_indices = sorted_indices[:k]
+
+    # Handle class_names being list or array
+    if isinstance(class_names, list):
+        class_names = np.array(class_names)
+    
+    return boxes[top_indices], confidences[top_indices], class_names[top_indices]
