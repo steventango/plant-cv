@@ -1,6 +1,10 @@
+import logging
+
 from flask import Flask, jsonify
 from plant.routes import plant_blueprint
 from pot.routes import pot_blueprint
+
+logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 app.register_blueprint(plant_blueprint)

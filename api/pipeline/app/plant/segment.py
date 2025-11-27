@@ -1,8 +1,12 @@
+import logging
+
 import cv2
 import numpy as np
 from plantcv import plantcv as pcv
 from skimage.exposure import equalize_adapthist
 from skimage.filters import threshold_otsu
+
+logger = logging.getLogger(__name__)
 
 
 def refine_mask_with_otsu(

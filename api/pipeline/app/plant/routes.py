@@ -16,6 +16,9 @@ from plant.visualization import (
     visualize_plant_detections,
     visualize_plant_segmentation,
 )
+import logging
+
+logger = logging.getLogger(__name__)
 
 plant_blueprint = Blueprint("plant", __name__, url_prefix="/plant")
 
@@ -95,6 +98,7 @@ def plant_detect():
 
         return jsonify(response)
     except Exception as e:
+        logger.error(f"Error in plant_detect: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
@@ -107,6 +111,7 @@ def plant_segment():
         {
             "image_data": "base64_encoded_image",
             "boxes": [[x1, y1, x2, y2], ...],
+            "confidences": [0.1, 0.2, ...],
             "mask_near_full_threshold": 0.92 (optional),
             "mask_median_multiplier": 10.0 (optional),
             "visualize": false (optional)
@@ -161,6 +166,7 @@ def plant_segment():
 
         # Step 3: Select best mask
         best_combined_score = None
+        logger.info(f"Confidences: {confidences}")
         if len(valid_indices) == 0:
             # Fallback: keep largest non-full-size mask
             non_full_idx = [i for i in range(len(masks)) if i not in reason_codes]
@@ -233,6 +239,7 @@ def plant_segment():
         return jsonify(result)
 
     except Exception as e:
+        logger.error(f"Error in plant_segment: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
