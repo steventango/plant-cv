@@ -69,6 +69,9 @@ def test_health():
 def test_pipeline_flow(test_image, output_dir):
     """Run full pipeline flow on the test image."""
 
+    output_dir = output_dir / test_image.stem
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     # 1. Detect
     print(f"\nTesting pot/detect on {test_image.name}")
     image_data = encode_image(test_image)
