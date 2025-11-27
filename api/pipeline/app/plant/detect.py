@@ -64,6 +64,30 @@ def filter_boxes_by_area(
 
     filtered_boxes = boxes[valid_masks]
     filtered_confidences = confidences[valid_masks]
+def filter_boxes_by_aspect_ratio(
+    boxes: np.ndarray,
+    confidences: np.ndarray,
+    class_names: list[str],
+    image_shape: tuple[int, int],
+    aspect_ratio_threshold: float = 1.5,
+):
+    if len(boxes) == 0:
+        return boxes, confidences, class_names, np.array([], dtype=bool)
+
+    H, W = image_shape[:2]
+    widths = boxes[:, 2] - boxes[:, 0]
+    heights = boxes[:, 3] - boxes[:, 1]
+    aspect_ratios = widths / heights
+
+    valid_masks = (1 / aspect_ratio_threshold <= aspect_ratios).astype(bool)
+    valid_masks &= (aspect_ratios <= aspect_ratio_threshold).astype(bool)
+
+    filtered_boxes = boxes[valid_masks]
+    filtered_confidences = confidences[valid_masks]
+    
+    # Ensure class_names is a numpy array for boolean indexing
+    if isinstance(class_names, list):
+        class_names = np.array(class_names)
     filtered_class_names = class_names[valid_masks]
 
     return filtered_boxes, filtered_confidences, filtered_class_names, valid_masks

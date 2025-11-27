@@ -69,6 +69,13 @@ def plant_detect():
                 boxes, confidences, class_names, crop_shape, area_ratio_threshold
             )
 
+        # Step 3: Filter boxes by aspect ratio
+        if len(boxes) > 0:
+            boxes, confidences, class_names, valid_box_mask = filter_boxes_by_aspect_ratio(
+                boxes, confidences, class_names, crop_shape, aspect_ratio_threshold
+            )
+
+
         response = {
             "boxes": boxes.tolist(),
             "confidences": confidences.tolist(),
