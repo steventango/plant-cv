@@ -116,8 +116,8 @@ def plant_segment():
         crop_shape = crop_np.shape[:2]
 
         boxes = np.array(data["boxes"])
-        confidences = np.array(data.get("confidences", [1.0] * len(boxes)))
-        mask_near_full_threshold = data.get("mask_near_full_threshold", 0.92)
+        confidences = np.array(data["confidences"])
+        mask_near_full_threshold = data.get("mask_near_full_threshold", 0.60)
         mask_median_multiplier = data.get("mask_median_multiplier", 10.0)
         visualize = data.get("visualize", False)
 
