@@ -140,21 +140,22 @@ def test_pipeline_flow(test_image, output_dir):
     warped_images = warp_result["warped_images"]
     assert len(warped_images) == len(quads)
 
-    for i, warped in enumerate(warped_images):
-        if warped:
-            img = decode_image(warped)
-            save_image(img, output_dir / f"{test_image.stem}_warp_{i:02d}.jpg")
-
     # 5. Plant Detect and Segment
-    print("Testing plant/detect and plant/segment on first warped image")
-    # Find first valid warped image
-    first_warped = next((w for w in warped_images if w is not None), None)
-    if first_warped:
+    print("Testing plant/detect and plant/segment on warped images")
+    for i, warped in enumerate(warped_images):
+        if not warped:
+            continue 
+
+        plant_dir = output_dir / f"plant_{i:02d}"
+        plant_dir.mkdir(parents=True, exist_ok=True)
+
+        img = decode_image(warped)
+        save_image(img, plant_dir / f"{i:02d}_warp.jpg")
+
         # 5a. Detect
         plant_detect_payload = {
-            "image_data": first_warped,
+            "image_data": warped,
             "visualize": True,
-            "text_prompt": "plant",
         }
         resp = requests.post(f"{BASE_URL}/plant/detect", json=plant_detect_payload)
         assert resp.status_code == 200
@@ -164,13 +165,14 @@ def test_pipeline_flow(test_image, output_dir):
 
         if "visualization" in detect_result:
             vis_image = decode_image(detect_result["visualization"])
-            save_image(vis_image, output_dir / f"{test_image.stem}_plant_detect.jpg")
+            save_image(vis_image, plant_dir / f"{i:02d}_detect.jpg")
 
         if len(boxes) > 0:
             # 5b. Segment
             plant_segment_payload = {
-                "image_data": first_warped,
+                "image_data": warped,
                 "boxes": boxes,
+                "confidences": detect_result["confidences"],
                 "visualize": True,
             }
             resp = requests.post(
@@ -185,13 +187,13 @@ def test_pipeline_flow(test_image, output_dir):
                 if "visualization" in segment_result:
                     vis_image = decode_image(segment_result["visualization"])
                     save_image(
-                        vis_image, output_dir / f"{test_image.stem}_plant_segment.jpg"
+                        vis_image, plant_dir / f"{i:02d}_segment.jpg"
                     )
 
                 # 6. Plant Stats
                 print("Testing plant/stats on first warped image")
                 stats_payload = {
-                    "warped_image": first_warped,
+                    "warped_image": warped,
                     "mask": segment_result["mask"],
                     "pot_size_mm": 60.0,
                     "margin": 0.25,
@@ -210,7 +212,7 @@ def test_pipeline_flow(test_image, output_dir):
                 if "visualization" in stats_result:
                     vis_image = decode_image(stats_result["visualization"])
                     save_image(
-                        vis_image, output_dir / f"{test_image.stem}_plant_stats.jpg"
+                        vis_image, plant_dir / f"{i:02d}_stats.jpg"
                     )
 
             else:
