@@ -11,6 +11,8 @@ services:
     volumes:
       - ./api/embeddings:/app
       - ~/.cache:/home/docker/.cache:cached
+    ports:
+      - "8803:8803"
     deploy:
       resources:
         reservations:
@@ -32,6 +34,8 @@ services:
     volumes:
       - ./api/grounding_dino:/app
       - ~/.cache:/home/docker/.cache:cached
+    ports:
+      - "8801:8801"
     deploy:
       resources:
         reservations:
@@ -53,6 +57,8 @@ services:
     volumes:
       - ./api/segment_anything:/app
       - ~/.cache:/home/docker/.cache:cached
+    ports:
+      - "8802:8802"
     deploy:
       resources:
         reservations:
@@ -70,7 +76,7 @@ services:
       - plant-network
     restart: unless-stopped
     ports:
-      - "8002:8000"
+      - "8800:8800"
     volumes:
       - ./api/pipeline:/app
       - /data/plant-rl:/data

@@ -11,7 +11,7 @@ def encode_image(image: Image.Image | np.ndarray) -> str:
     """Encode image to base64 string."""
     if isinstance(image, np.ndarray):
         image = Image.fromarray(image)
-    
+
     buf = io.BytesIO()
     image.save(buf, format="JPEG")
     img_str = base64.b64encode(buf.getvalue()).decode("utf-8")
@@ -29,7 +29,7 @@ def call_grounding_dino_api(
     text_prompt: str,
     threshold: float = 0.05,
     text_threshold: float = 0.05,
-    server_url: str = "http://grounding-dino:8000/predict",
+    server_url: str = "http://grounding-dino:8801/predict",
 ):
     """
     Call the Grounding DINO API with an image and text prompt.
@@ -87,7 +87,7 @@ def call_segment_anything_api(
     image: Image.Image,
     boxes: np.ndarray,
     multimask_output: bool = False,
-    server_url: str = "http://segment-anything:8000/predict",
+    server_url: str = "http://segment-anything:8802/predict",
 ):
     """
     Call Segment Anything API for the given boxes and return masks, scores.

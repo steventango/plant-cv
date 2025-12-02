@@ -8,11 +8,11 @@ import requests
 from PIL import Image
 
 # Configuration
-BASE_URL = "http://pipeline:8000"
+BASE_URL = "http://pipeline:8800"
 TEST_IMAGE_PATH = Path(
     "/data/online/E13/P1/Dirichlet1/alliance-zone01/images/2025-10-08T153000+0000_left.jpg"
 )
-OUTPUT_DIR = Path("test_output")
+OUTPUT_DIR = Path("/tmp/plant-cv/api/pipeline/test_output")
 
 
 @pytest.fixture
@@ -144,7 +144,7 @@ def test_pipeline_flow(test_image, output_dir):
     print("Testing plant/detect and plant/segment on warped images")
     for i, warped in enumerate(warped_images):
         if not warped:
-            continue 
+            continue
 
         plant_dir = output_dir / f"plant_{i:02d}"
         plant_dir.mkdir(parents=True, exist_ok=True)
@@ -186,9 +186,7 @@ def test_pipeline_flow(test_image, output_dir):
 
                 if "visualization" in segment_result:
                     vis_image = decode_image(segment_result["visualization"])
-                    save_image(
-                        vis_image, plant_dir / f"{i:02d}_segment.jpg"
-                    )
+                    save_image(vis_image, plant_dir / f"{i:02d}_segment.jpg")
 
                 # 6. Plant Stats
                 print("Testing plant/stats on first warped image")
@@ -211,9 +209,7 @@ def test_pipeline_flow(test_image, output_dir):
 
                 if "visualization" in stats_result:
                     vis_image = decode_image(stats_result["visualization"])
-                    save_image(
-                        vis_image, plant_dir / f"{i:02d}_stats.jpg"
-                    )
+                    save_image(vis_image, plant_dir / f"{i:02d}_stats.jpg")
 
             else:
                 print(f"Plant segmentation failed: {segment_result.get('note')}")
