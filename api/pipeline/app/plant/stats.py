@@ -2,7 +2,9 @@ import numpy as np
 from plantcv import plantcv as pcv
 
 
-def calculate_scale_factor(image_width: int, pot_size_mm: float = 60.0, margin: float = 0.25) -> float:
+def calculate_scale_factor(
+    image_width: int, pot_size_mm: float = 60.0, margin: float = 0.25
+) -> float:
     """
     Calculate the scale factor (pixels per mm) for a warped image.
     """

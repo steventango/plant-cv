@@ -64,7 +64,7 @@ def filter_boxes_by_area(
 
     filtered_boxes = boxes[valid_masks]
     filtered_confidences = confidences[valid_masks]
-    
+
     # Ensure class_names is a numpy array for boolean indexing
     if isinstance(class_names, list):
         class_names = np.array(class_names)
@@ -93,13 +93,14 @@ def filter_boxes_by_aspect_ratio(
 
     filtered_boxes = boxes[valid_masks]
     filtered_confidences = confidences[valid_masks]
-    
+
     # Ensure class_names is a numpy array for boolean indexing
     if isinstance(class_names, list):
         class_names = np.array(class_names)
     filtered_class_names = class_names[valid_masks]
 
     return filtered_boxes, filtered_confidences, filtered_class_names, valid_masks
+
 
 def select_top_boxes(
     boxes: np.ndarray,
@@ -133,5 +134,5 @@ def select_top_boxes(
     # Handle class_names being list or array
     if isinstance(class_names, list):
         class_names = np.array(class_names)
-    
+
     return boxes[top_indices], confidences[top_indices], class_names[top_indices]

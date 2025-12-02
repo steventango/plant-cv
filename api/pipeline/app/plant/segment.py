@@ -170,7 +170,9 @@ def select_best_mask(
     )
     logger.info(f"Center score: {center_score}")
 
-    mask_areas = np.array([np.sum(mask > 0) for mask in masks[valid_indices]], dtype=float)
+    mask_areas = np.array(
+        [np.sum(mask > 0) for mask in masks[valid_indices]], dtype=float
+    )
     box_widths = valid_boxes[:, 2] - valid_boxes[:, 0]
     box_heights = valid_boxes[:, 3] - valid_boxes[:, 1]
     box_areas = box_widths * box_heights
@@ -185,7 +187,7 @@ def select_best_mask(
     combined_scores = valid_confidences * center_score * area_ratio_score
     logger.info(f"Combined scores: {combined_scores}")
     combined_scores = np.exp(combined_scores) / np.sum(np.exp(combined_scores))
-    
+
     best_relative_idx = int(np.argmax(combined_scores))
     best_idx_original = int(valid_indices[int(best_relative_idx)])
     best_score = combined_scores[best_relative_idx]
