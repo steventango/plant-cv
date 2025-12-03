@@ -79,7 +79,7 @@ with open("image.jpg", "rb") as f:
 
 # Make request
 response = requests.post(
-    "http://localhost:8002/predict",
+    "http://localhost:8803/predict",
     json={
         "image_data": image_data,
         "embedding_types": ["cls_token", "patch_features"]
@@ -98,7 +98,7 @@ print(f"Feature dimension: {len(patch_embeddings[0])}")
 
 ```bash
 IMAGE_BASE64=$(base64 -w 0 image.jpg)
-curl -X POST http://localhost:8002/predict \
+curl -X POST http://localhost:8803/predict \
   -H "Content-Type: application/json" \
   -d "{\"image_data\": \"$IMAGE_BASE64\", \"embedding_types\": [\"cls_token\", \"patch_features\"]}"
 ```
@@ -125,7 +125,7 @@ Build and run with Docker Compose:
 docker compose up --build
 ```
 
-The API will be available at `http://localhost:8002`.
+The API will be available at `http://localhost:8803`.
 
 ## Configuration
 
