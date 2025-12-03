@@ -108,6 +108,6 @@ class GroundingDinoAPI(ls.LitAPI):
 
 
 if __name__ == "__main__":
-    api = GroundingDinoAPI(max_batch_size=16, batch_timeout=1)
+    api = GroundingDinoAPI(max_batch_size=8, batch_timeout=1)
     server = ls.LitServer(api)
     server.run(port=8801, num_api_servers=1, generate_client_file=False)
