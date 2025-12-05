@@ -9,6 +9,7 @@ from plant.detect import (
     detect_plant,
     filter_boxes_by_area,
     filter_boxes_by_aspect_ratio,
+    filter_boxes_by_centroid_in_pot,
     select_top_boxes,
 )
 from plant.segment import (
@@ -62,6 +63,7 @@ def plant_detect():
         detection_text_threshold = data.get("detection_text_threshold", 0.0)
         area_ratio_threshold = data.get("area_ratio_threshold", 0.90)
         aspect_ratio_threshold = data.get("aspect_ratio_threshold", 2)
+        margin = data.get("margin", 0.25)
         visualize = data.get("visualize", False)
 
         # Step 1: Detect plants
@@ -86,7 +88,15 @@ def plant_detect():
                 )
             )
 
-        # Step 4: Keep k-most confident boxes
+        # Step 4: Filter boxes by centroid in pot
+        if len(boxes) > 0:
+            boxes, confidences, class_names, valid_box_mask = (
+                filter_boxes_by_centroid_in_pot(
+                    boxes, confidences, class_names, crop_shape, margin
+                )
+            )
+
+        # Step 5: Keep k-most confident boxes
         boxes, confidences, class_names = select_top_boxes(
             boxes, confidences, class_names, crop_shape, k=5
         )

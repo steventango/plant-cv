@@ -1,6 +1,6 @@
 import numpy as np
 from PIL import Image
-from utils import call_grounding_dino_api
+from app.utils import call_grounding_dino_api
 
 
 def detect_plant(
@@ -90,6 +90,43 @@ def filter_boxes_by_aspect_ratio(
 
     valid_masks = (1 / aspect_ratio_threshold <= aspect_ratios).astype(bool)
     valid_masks &= (aspect_ratios <= aspect_ratio_threshold).astype(bool)
+
+    filtered_boxes = boxes[valid_masks]
+    filtered_confidences = confidences[valid_masks]
+
+    # Ensure class_names is a numpy array for boolean indexing
+    if isinstance(class_names, list):
+        class_names = np.array(class_names)
+    filtered_class_names = class_names[valid_masks]
+
+    return filtered_boxes, filtered_confidences, filtered_class_names, valid_masks
+    return filtered_boxes, filtered_confidences, filtered_class_names, valid_masks
+
+
+def filter_boxes_by_centroid_in_pot(
+    boxes: np.ndarray,
+    confidences: np.ndarray,
+    class_names: list[str],
+    image_shape: tuple[int, int],
+    margin: float = 0.25,
+):
+    if len(boxes) == 0:
+        return boxes, confidences, class_names, np.array([], dtype=bool)
+
+    H, W = image_shape[:2]
+
+    # Calculate centroids
+    cx = (boxes[:, 0] + boxes[:, 2]) / 2
+    cy = (boxes[:, 1] + boxes[:, 3]) / 2
+
+    # Calculate pot start and end
+    norm_start = margin / (1 + 2 * margin)
+    norm_end = (1 + margin) / (1 + 2 * margin)
+
+    x_start, x_end = W * norm_start, W * norm_end
+    y_start, y_end = H * norm_start, H * norm_end
+
+    valid_masks = (cx >= x_start) & (cx <= x_end) & (cy >= y_start) & (cy <= y_end)
 
     filtered_boxes = boxes[valid_masks]
     filtered_confidences = confidences[valid_masks]
