@@ -44,7 +44,6 @@ def analyze_plant_mask(
     mask_binary: np.ndarray,
     pot_size_mm: float = 60.0,
     margin: float = 0.25,
-    visualize: bool = False,
 ):
     """
     Analyze a plant mask using PlantCV to extract morphological features.
@@ -54,7 +53,6 @@ def analyze_plant_mask(
         mask_binary: Binary plant mask (0 or 255) as numpy array
         pot_size_mm: Physical size of pot in mm (default: 60mm)
         margin: Margin ratio in warped image (default: 0.25 = 25%)
-        visualize: Whether to return a visualization image
 
     Returns:
         stats: Dict with plant statistics
@@ -75,15 +73,10 @@ def analyze_plant_mask(
     # Clear previous observations
     pcv.outputs.clear()
 
-    visualization = None
-
     try:
         analysis_image = pcv.analyze.size(
             img=warped_image_np, labeled_mask=labeled_mask, n_labels=1
         )
-
-        if visualize and analysis_image is not None:
-            visualization = analysis_image
 
     except Exception as e:
         # Return empty stats if analysis fails
@@ -106,7 +99,7 @@ def analyze_plant_mask(
             "ellipse_angle": 0.0,
             "ellipse_eccentricity": 0.0,
             "error": str(e),
-        }, None
+        }
 
     stats = {}
 
@@ -120,4 +113,4 @@ def analyze_plant_mask(
 
     stats = convert_px_to_mm(stats, scale)
 
-    return stats, visualization
+    return stats, analysis_image

@@ -3,24 +3,23 @@ import io
 
 import numpy as np
 from flask import Blueprint, jsonify, request
-from utils import call_segment_anything_api, decode_image, encode_image
+from app.utils import call_segment_anything_api, decode_image, encode_image
 
-from plant.detect import (
+from app.plant.detect import (
     detect_plant,
     filter_boxes_by_area,
     filter_boxes_by_aspect_ratio,
     filter_boxes_by_centroid_in_pot,
     select_top_boxes,
 )
-from plant.segment import (
+from app.plant.segment import (
     filter_masks_by_area,
     refine_mask_with_otsu,
     select_best_mask,
 )
-from plant.stats import analyze_plant_mask
-from plant.visualization import (
-    visualize_plant_detections,
-    visualize_plant_segmentation,
+from app.plant.stats import analyze_plant_mask
+from app.plant.visualize import (
+    visualize_annotation,
 )
 import logging
 
@@ -49,7 +48,6 @@ def plant_detect():
             "boxes": [[x1, y1, x2, y2], ...],
             "confidences": [0.95, ...],
             "class_names": ["plant", ...],
-            "visualization": "base64_encoded_image" (if visualize=true)
         }
     """
     try:
@@ -64,7 +62,6 @@ def plant_detect():
         area_ratio_threshold = data.get("area_ratio_threshold", 0.90)
         aspect_ratio_threshold = data.get("aspect_ratio_threshold", 2)
         margin = data.get("margin", 0.25)
-        visualize = data.get("visualize", False)
 
         # Step 1: Detect plants
         boxes, confidences, class_names = detect_plant(
@@ -109,10 +106,6 @@ def plant_detect():
             else class_names,
         }
 
-        if visualize and len(boxes) > 0:
-            annotated = visualize_plant_detections(crop_np, boxes, confidences)
-            response["visualization"] = encode_image(annotated)
-
         return jsonify(response)
     except Exception as e:
         logger.error(f"Error in plant_detect: {e}", exc_info=True)
@@ -136,11 +129,11 @@ def plant_segment():
 
     Output JSON:
         {
-            "success": bool,
             "mask": "base64_encoded_mask",
+            "mask_scores": [0.1, 0.2, ...],
+            "combined_scores": [0.1, 0.2, ...],
             "mask_score": float,
             "selected_index": int,
-            "visualization": "base64_encoded_image" (if visualize=true)
         }
     """
     try:
@@ -153,12 +146,13 @@ def plant_segment():
         confidences = np.array(data["confidences"])
         mask_near_full_threshold = data.get("mask_near_full_threshold", 0.60)
         mask_median_multiplier = data.get("mask_median_multiplier", 10.0)
-        visualize = data.get("visualize", False)
 
         result = {
             "success": False,
             "mask": None,
             "mask_score": None,
+            "mask_scores": None,
+            "combined_scores": None,
             "selected_index": None,
         }
 
@@ -183,6 +177,7 @@ def plant_segment():
 
         # Step 3: Select best mask
         best_combined_score = None
+        combined_scores = None
         logger.info(f"Confidences: {confidences}")
         if len(valid_indices) == 0:
             # Fallback: keep largest non-full-size mask
@@ -199,20 +194,9 @@ def plant_segment():
                     for k, v in reason_codes.items()
                 }
 
-                if visualize:
-                    annotated = visualize_plant_segmentation(
-                        crop_np,
-                        boxes,
-                        confidences,
-                        masks,
-                        best_idx=None,
-                        reason_codes=reason_codes,
-                    )
-                    result["visualization"] = encode_image(annotated)
-
                 return jsonify(result)
         else:
-            best_idx_original, best_combined_score = select_best_mask(
+            best_idx_original, best_combined_score, combined_scores = select_best_mask(
                 masks, confidences, boxes, crop_shape, valid_indices
             )
             best_combined_score = float(best_combined_score)
@@ -231,27 +215,25 @@ def plant_segment():
             else None
         )
 
-        # Encode mask
-        mask_bytes = io.BytesIO()
-        np.save(mask_bytes, mask_binary)
-        mask_b64 = base64.b64encode(mask_bytes.getvalue()).decode("utf-8")
+        # Encode masks
+        def encode_mask(mask):
+            mask_bytes = io.BytesIO()
+            np.save(mask_bytes, mask)
+            return base64.b64encode(mask_bytes.getvalue()).decode("utf-8")
+
+        masks_b64 = [encode_mask(mask) for mask in masks]
+
+        scores = scores.reshape(-1).tolist()
+        combined_scores = combined_scores.reshape(-1).tolist()
 
         result["success"] = True
-        result["mask"] = mask_b64
+        result["mask"] = masks_b64[best_idx_original]
         result["mask_score"] = best_mask_score
         result["combined_score"] = best_combined_score
+        result["mask_scores"] = scores
+        result["combined_scores"] = combined_scores
+        result["masks"] = masks_b64
         result["selected_index"] = int(best_idx_original)
-
-        if visualize:
-            annotated = visualize_plant_segmentation(
-                crop_np,
-                boxes,
-                confidences,
-                masks,
-                best_idx=best_idx_original,
-                combined_score=best_combined_score,
-            )
-            result["visualization"] = encode_image(annotated)
 
         return jsonify(result)
 
@@ -300,21 +282,89 @@ def plant_stats():
         # Get optional parameters
         pot_size_mm = data.get("pot_size_mm", 60.0)
         margin = data.get("margin", 0.25)
-        visualize = data.get("visualize", False)
 
         # Analyze plant mask
-        stats, visualization = analyze_plant_mask(
+        stats, _ = analyze_plant_mask(
             warped_image_np,
             mask_np,
             pot_size_mm=pot_size_mm,
             margin=margin,
-            visualize=visualize,
         )
 
         response = {"stats": stats}
-        if visualize and visualization is not None:
-            response["visualization"] = encode_image(visualization)
 
         return jsonify(response)
     except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@plant_blueprint.route("/visualize", methods=["POST"])
+def plant_visualize():
+    """
+    Visualize plant detections, segmentation, or stats.
+
+    Input JSON:
+        {
+            "image_data": "base64_encoded_image",
+            "boxes": [[x1, y1, x2, y2], ...], (optional)
+            "confidences": [float, ...], (optional)
+            "masks": ["base64_encoded_mask", ...], (optional)
+            "labels": ["string", ...], (optional)
+            "stats": bool (optional, default true)
+            "selected_index": int (optional)
+            "mask_score": float (optional)
+            "combined_score": float (optional)
+            "pot_size_mm": float (optional)
+            "margin": float (optional)
+        }
+
+    Output JSON:
+        {
+            "visualization": "base64_encoded_image"
+        }
+    """
+    try:
+        data = request.json
+        image = decode_image(data["image_data"])
+        image_np = np.array(image)
+
+        boxes = data.get("boxes")
+        confidences = data.get("confidences")
+        selected_index = data.get("selected_index")
+        mask_scores = data.get("mask_scores")
+        combined_scores = data.get("combined_scores")
+        pot_size_mm = data.get("pot_size_mm")
+        margin = data.get("margin")
+
+        mask_b64s = data.get("masks")
+        mask_nps = None
+
+        def decode_mask(mask_b64):
+            mask_bytes = io.BytesIO(base64.b64decode(mask_b64))
+            return np.load(mask_bytes)
+
+        if mask_b64s:
+            mask_nps = [decode_mask(mask_b64) for mask_b64 in mask_b64s]
+
+        labels = data.get("labels")
+        stats = data.get("stats", True)
+
+        annotated = visualize_annotation(
+            image=image_np,
+            boxes=boxes,
+            confidences=confidences,
+            masks=mask_nps,
+            labels=labels,
+            stats=stats,
+            selected_index=selected_index,
+            mask_scores=mask_scores,
+            combined_scores=combined_scores,
+            pot_size_mm=pot_size_mm,
+            margin=margin,
+        )
+
+        return jsonify({"visualization": encode_image(annotated)})
+
+    except Exception as e:
+        logger.error(f"Error in plant_visualize: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500

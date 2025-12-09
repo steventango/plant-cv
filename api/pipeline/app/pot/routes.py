@@ -3,12 +3,12 @@ import io
 
 import numpy as np
 from flask import Blueprint, jsonify, request
-from utils import call_segment_anything_api, decode_image, encode_image
+from app.utils import call_segment_anything_api, decode_image, encode_image
 
-from pot.detect import detect_pots
-from pot.quad import compute_quadrilaterals
-from pot.warp import warp_pots
-from pot.visualization import (
+from app.pot.detect import detect_pots
+from app.pot.quad import compute_quadrilaterals
+from app.pot.warp import warp_pots
+from app.pot.visualize import (
     visualize_pot_detections,
     visualize_pot_segmentation,
     visualize_quadrilaterals,

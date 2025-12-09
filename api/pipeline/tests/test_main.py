@@ -149,13 +149,9 @@ def test_pipeline_flow(test_image, output_dir):
         plant_dir = output_dir / f"plant_{i:02d}"
         plant_dir.mkdir(parents=True, exist_ok=True)
 
-        img = decode_image(warped)
-        save_image(img, plant_dir / f"{i:02d}_warp.jpg")
-
         # 5a. Detect
         plant_detect_payload = {
             "image_data": warped,
-            "visualize": True,
         }
         resp = requests.post(f"{BASE_URL}/plant/detect", json=plant_detect_payload)
         assert resp.status_code == 200
@@ -163,30 +159,22 @@ def test_pipeline_flow(test_image, output_dir):
 
         boxes = detect_result["boxes"]
 
-        if "visualization" in detect_result:
-            vis_image = decode_image(detect_result["visualization"])
-            save_image(vis_image, plant_dir / f"{i:02d}_detect.jpg")
-
         if len(boxes) > 0:
             # 5b. Segment
             plant_segment_payload = {
                 "image_data": warped,
                 "boxes": boxes,
                 "confidences": detect_result["confidences"],
-                "visualize": True,
             }
             resp = requests.post(
                 f"{BASE_URL}/plant/segment", json=plant_segment_payload
             )
             assert resp.status_code == 200
             segment_result = resp.json()
+            stats = None
 
             if segment_result["success"]:
                 assert "mask" in segment_result
-
-                if "visualization" in segment_result:
-                    vis_image = decode_image(segment_result["visualization"])
-                    save_image(vis_image, plant_dir / f"{i:02d}_segment.jpg")
 
                 # 6. Plant Stats
                 print("Testing plant/stats on first warped image")
@@ -195,7 +183,6 @@ def test_pipeline_flow(test_image, output_dir):
                     "mask": segment_result["mask"],
                     "pot_size_mm": 60.0,
                     "margin": 0.25,
-                    "visualize": True,
                 }
                 resp = requests.post(f"{BASE_URL}/plant/stats", json=stats_payload)
                 assert resp.status_code == 200, resp.text
@@ -206,12 +193,29 @@ def test_pipeline_flow(test_image, output_dir):
                 assert "area" in stats
                 assert "width" in stats
                 assert "height" in stats
-
-                if "visualization" in stats_result:
-                    vis_image = decode_image(stats_result["visualization"])
-                    save_image(vis_image, plant_dir / f"{i:02d}_stats.jpg")
-
             else:
                 print(f"Plant segmentation failed: {segment_result.get('note')}")
+            # Visualize
+            visualize_payload = {
+                "image_data": warped,
+                "boxes": boxes,
+                "confidences": detect_result["confidences"],
+                "masks": segment_result.get("masks"),
+                "stats": stats is not None,
+                "selected_index": segment_result.get("selected_index"),
+                "mask_scores": segment_result.get("mask_scores"),
+                "combined_scores": segment_result.get("combined_scores"),
+                "pot_size_mm": 60.0,
+                "margin": 0.25,
+            }
+            resp = requests.post(
+                f"{BASE_URL}/plant/visualize", json=visualize_payload
+            )
+            assert resp.status_code == 200
+            visualize_result = resp.json()
+
+            if "visualization" in visualize_result:
+                vis_image = decode_image(visualize_result["visualization"])
+                save_image(vis_image, plant_dir / f"{i:02d}_visualize.jpg")
         else:
             print("No plants detected (expected if crop is empty)")

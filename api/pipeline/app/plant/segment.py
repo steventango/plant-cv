@@ -148,8 +148,12 @@ def select_best_mask(
     """
     if valid_indices is None:
         valid_indices = np.arange(len(masks), dtype=int)
-    elif len(valid_indices) == 0:
-        return None, 0.0
+        valid_mask = np.ones(len(masks), dtype=bool)
+    else:
+        valid_mask = np.zeros(len(masks), dtype=bool)
+        valid_mask[valid_indices] = True
+
+    confidences[~valid_mask] = 0.0
 
     H, W = image_shape[:2]
     center_x = W / 2.0
@@ -157,8 +161,8 @@ def select_best_mask(
     # The crop width W is 1.5 * pot_width, so sigma should be equal to W.
     sigma = min(W, H)
 
-    valid_boxes = boxes[valid_indices]
-    valid_confidences = confidences[valid_indices].copy()
+    valid_boxes = boxes
+    valid_confidences = confidences
 
     box_centers_x = (valid_boxes[:, 0] + valid_boxes[:, 2]) / 2
     box_centers_y = (valid_boxes[:, 1] + valid_boxes[:, 3]) / 2
@@ -170,9 +174,7 @@ def select_best_mask(
     )
     logger.info(f"Center score: {center_score}")
 
-    mask_areas = np.array(
-        [np.sum(mask > 0) for mask in masks[valid_indices]], dtype=float
-    )
+    mask_areas = np.array([np.sum(mask > 0) for mask in masks], dtype=float)
     box_widths = valid_boxes[:, 2] - valid_boxes[:, 0]
     box_heights = valid_boxes[:, 3] - valid_boxes[:, 1]
     box_areas = box_widths * box_heights
@@ -189,7 +191,6 @@ def select_best_mask(
     combined_scores = np.exp(combined_scores) / np.sum(np.exp(combined_scores))
 
     best_relative_idx = int(np.argmax(combined_scores))
-    best_idx_original = int(valid_indices[int(best_relative_idx)])
     best_score = combined_scores[best_relative_idx]
 
-    return best_idx_original, best_score
+    return best_relative_idx, best_score, combined_scores

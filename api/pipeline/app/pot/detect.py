@@ -1,6 +1,6 @@
 import numpy as np
 from PIL import Image
-from utils import call_grounding_dino_api
+from app.utils import call_grounding_dino_api
 
 
 def filter_by_aspect_ratio(boxes, ratio: float = 3 / 2):

@@ -1,8 +1,8 @@
 import logging
 
 from flask import Flask, jsonify
-from plant.routes import plant_blueprint
-from pot.routes import pot_blueprint
+from app.plant.routes import plant_blueprint
+from app.pot.routes import pot_blueprint
 
 logging.basicConfig(level=logging.INFO)
 
