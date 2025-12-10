@@ -136,25 +136,25 @@ def visualize_annotation(
     if labels is None:
         labels = [
             f"{i}"
-            for i in range(len(boxes))
+            for i in range(len(detections))
         ]
 
         if confidences is not None:
             labels = [
                 f"{labels[i]} B:{confidences[i]:.2f}"
-                for i in range(len(boxes))
+                for i in range(len(detections))
             ]
 
         if mask_scores is not None:
             labels = [
                 f"{labels[i]} M:{mask_scores[i]:.2f}"
-                for i in range(len(boxes))
+                for i in range(len(detections))
             ]
 
         if combined_scores is not None:
             labels = [
                 f"{labels[i]} C:{combined_scores[i]:.2f}"
-                for i in range(len(boxes))
+                for i in range(len(detections))
             ]
 
         if selected_index is not None:
