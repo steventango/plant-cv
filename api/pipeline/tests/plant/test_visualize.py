@@ -1,6 +1,10 @@
 import numpy as np
 from app.plant.visualize import visualize_annotation
 from PIL import Image
+from pathlib import Path
+
+OUTPUT_DIR = Path("/tmp/plant-cv/api/pipeline/plant/test_output")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def test_visualize_annotation_boxes():
@@ -10,7 +14,7 @@ def test_visualize_annotation_boxes():
     annotated = visualize_annotation(image, boxes=boxes)
     assert annotated.shape == image.shape
     assert not np.array_equal(annotated, image)
-    Image.fromarray(annotated).save("/tmp/test_visualize_annotation_boxes.png")
+    Image.fromarray(annotated).save(OUTPUT_DIR / "test_visualize_annotation_boxes.png")
 
 
 def test_visualize_annotation_mask():
@@ -21,7 +25,7 @@ def test_visualize_annotation_mask():
     annotated = visualize_annotation(image, masks=masks)
     assert annotated.shape == image.shape
     assert not np.array_equal(annotated, image)
-    Image.fromarray(annotated).save("/tmp/test_visualize_annotation_mask.png")
+    Image.fromarray(annotated).save(OUTPUT_DIR / "test_visualize_annotation_mask.png")
 
 
 def test_visualize_annotation_stats():
@@ -32,7 +36,7 @@ def test_visualize_annotation_stats():
     annotated = visualize_annotation(image, masks=masks, stats=True)
     assert annotated.shape == image.shape
     assert not np.array_equal(annotated, image)
-    Image.fromarray(annotated).save("/tmp/test_visualize_annotation_stats.png")
+    Image.fromarray(annotated).save(OUTPUT_DIR / "test_visualize_annotation_stats.png")
 
 
 def test_visualize_annotation_combined():
@@ -46,4 +50,4 @@ def test_visualize_annotation_combined():
     )
     assert annotated.shape == image.shape
     assert not np.array_equal(annotated, image)
-    Image.fromarray(annotated).save("/tmp/test_visualize_annotation_combined.png")
+    Image.fromarray(annotated).save(OUTPUT_DIR / "test_visualize_annotation_combined.png")
