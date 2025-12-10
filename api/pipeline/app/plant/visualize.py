@@ -111,7 +111,11 @@ def visualize_annotation(
         length = len(masks) if masks is not None else 0
 
     xyxy = np.array(boxes) if boxes is not None else np.empty((length, 4))
-    mask = np.array(masks) if masks is not None else np.empty((length, image.shape[0], image.shape[1]))
+    mask = (
+        np.array(masks)
+        if masks is not None
+        else np.empty((length, image.shape[0], image.shape[1]))
+    )
 
     detections = sv.Detections(
         xyxy=xyxy,
@@ -134,21 +138,16 @@ def visualize_annotation(
         )
 
     if labels is None:
-        labels = [
-            f"{i}"
-            for i in range(len(detections))
-        ]
+        labels = [f"{i}" for i in range(len(detections))]
 
         if confidences is not None:
             labels = [
-                f"{labels[i]} B:{confidences[i]:.2f}"
-                for i in range(len(detections))
+                f"{labels[i]} B:{confidences[i]:.2f}" for i in range(len(detections))
             ]
 
         if mask_scores is not None:
             labels = [
-                f"{labels[i]} M:{mask_scores[i]:.2f}"
-                for i in range(len(detections))
+                f"{labels[i]} M:{mask_scores[i]:.2f}" for i in range(len(detections))
             ]
 
         if combined_scores is not None:

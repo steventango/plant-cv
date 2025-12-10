@@ -50,4 +50,6 @@ def test_visualize_annotation_combined():
     )
     assert annotated.shape == image.shape
     assert not np.array_equal(annotated, image)
-    Image.fromarray(annotated).save(OUTPUT_DIR / "test_visualize_annotation_combined.png")
+    Image.fromarray(annotated).save(
+        OUTPUT_DIR / "test_visualize_annotation_combined.png"
+    )

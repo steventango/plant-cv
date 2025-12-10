@@ -208,9 +208,7 @@ def test_pipeline_flow(test_image, output_dir):
                 "pot_size_mm": 60.0,
                 "margin": 0.25,
             }
-            resp = requests.post(
-                f"{BASE_URL}/plant/visualize", json=visualize_payload
-            )
+            resp = requests.post(f"{BASE_URL}/plant/visualize", json=visualize_payload)
             assert resp.status_code == 200
             visualize_result = resp.json()
 
