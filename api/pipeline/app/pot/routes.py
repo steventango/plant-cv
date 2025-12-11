@@ -42,7 +42,7 @@ def detect():
         data = request.json
         image = decode_image(data["image_data"])
         text_prompt = data.get("text_prompt", "pot")
-        threshold = data.get("threshold", 0.03)
+        threshold = data.get("threshold", 0.028)
         visualize = data.get("visualize", False)
 
         boxes, confidences, class_names = detect_pots(
