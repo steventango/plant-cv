@@ -78,7 +78,6 @@ def test_pipeline_flow(test_image, output_dir):
     detect_payload = {
         "image_data": image_data,
         "text_prompt": "pot",
-        "threshold": 0.03,
         "visualize": True,
     }
     resp = requests.post(f"{BASE_URL}/pot/detect", json=detect_payload)
