@@ -1,11 +1,12 @@
+import logging
+
 import numpy as np
 from PIL import Image
+
 from app.utils import call_grounding_dino_api
 
-
-def log_debug(message):
-    with open("/tmp/pot_detect_debug.log", "a") as f:
-        f.write(message + "\n")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 def filter_by_aspect_ratio(boxes, low: float = 0.5, high: float = 1.5):
@@ -22,8 +23,8 @@ def filter_by_aspect_ratio(boxes, low: float = 0.5, high: float = 1.5):
     ar_mask = ((aspect >= low) & (aspect <= high)).astype(bool)
     if np.sum(ar_mask) < len(boxes):
         dropped = ~ar_mask
-        log_debug(
-            f"DEBUG: AR Filter dropped {np.sum(dropped)} detected boxes. Aspects of dropped: {aspect[dropped]}"
+        logger.debug(
+            f"AR Filter dropped {np.sum(dropped)} detected boxes. Aspects of dropped: {aspect[dropped]}"
         )
     return ar_mask
 
@@ -74,8 +75,8 @@ def filter_by_areas(
         dropped = ~inlier_mask
     if np.sum(inlier_mask) < len(boxes):
         dropped = ~inlier_mask
-        log_debug(
-            f"DEBUG: Area Filter dropped {np.sum(dropped)} boxes. Areas of dropped: {areas[dropped]}. Limits: Lo={lo_thresh}, Hi={hi_thresh}"
+        logger.debug(
+            f"Area Filter dropped {np.sum(dropped)} boxes. Areas of dropped: {areas[dropped]}. Limits: Lo={lo_thresh}, Hi={hi_thresh}"
         )
 
     # Log kept areas using log_debug
@@ -88,17 +89,8 @@ def filter_by_areas(
         with np.errstate(divide="ignore", invalid="ignore"):
             kept_aspects = kept_widths / np.maximum(kept_heights, 1e-6)
 
-        # We need original confidences here.
-        # Note: 'confidences' in this scope is already filtered by previous steps (AR filter),
-        # but not yet by area filter (inlier_mask is applied to 'boxes' inside this function logic flow in caller?)
-        # Wait, filter_by_areas receives 'boxes' and returns 'inlier_mask'.
-        # It doesn't have access to 'confidences' array passed to it.
-        # So we can't log confidences HERE easily without changing function signature.
-        # Let's just log Areas and Aspects here. Confidences are logged in the caller or we can pass them.
-        # Check signature: def filter_by_areas(boxes, areas, image_np):
-
-        log_debug(
-            f"DEBUG: Kept {len(kept_areas)} boxes.\nAreas: {np.sort(kept_areas)}\nAspects: {kept_aspects}"
+        logger.debug(
+            f"Kept {len(kept_areas)} boxes.\nAreas: {np.sort(kept_areas)}\nAspects: {kept_aspects}"
         )
     if not inlier_mask.any():
         # Fallback: keep box closest to median area
@@ -184,8 +176,8 @@ def apply_nms(boxes, confidences, iou_threshold=0.55):
         keep_mask = iou < iou_threshold
         dropped_indices = rest_indices[~keep_mask]
         if len(dropped_indices) > 0:
-            log_debug(
-                f"DEBUG: NMS Suppressed indices {dropped_indices} due to IoU > {iou_threshold} (Max IoU {[f'{x:.2f}' for x in iou[~keep_mask]]}) with box {current}"
+            logger.debug(
+                f"NMS Suppressed indices {dropped_indices} due to IoU > {iou_threshold} (Max IoU {[f'{x:.2f}' for x in iou[~keep_mask]]}) with box {current}"
             )
 
         indices = rest_indices[keep_mask]
@@ -236,8 +228,7 @@ def detect_pots(image, text_prompt="pot", threshold=0.01, text_threshold=0):
         threshold=threshold,
         text_threshold=text_threshold,
     )
-    log_debug(f"DEBUG: Model returned {len(boxes)} boxes.")
-    # print(f"DEBUG: Raw confidences: {confidences}", flush=True)
+    logger.debug(f"Model returned {len(boxes)} boxes.")
 
     if len(boxes) == 0:
         return boxes, confidences, class_names
@@ -256,7 +247,7 @@ def detect_pots(image, text_prompt="pot", threshold=0.01, text_threshold=0):
     confidences = confidences[inlier_mask]
 
     if len(confidences) > 0:
-        log_debug(f"DEBUG: Post-Area Filter Confidences: {np.sort(confidences)}")
+        logger.debug(f"Post-Area Filter Confidences: {np.sort(confidences)}")
 
     class_names = (
         class_names[inlier_mask]
@@ -267,8 +258,8 @@ def detect_pots(image, text_prompt="pot", threshold=0.01, text_threshold=0):
     conf_mask = filter_by_confidence(confidences)
     if np.sum(conf_mask) < len(boxes):
         dropped = ~conf_mask
-        log_debug(
-            f"DEBUG: Confidence Filter dropped {np.sum(dropped)} boxes. Confidences of dropped: {confidences[dropped]}"
+        logger.debug(
+            f"Confidence Filter dropped {np.sum(dropped)} boxes. Confidences of dropped: {confidences[dropped]}"
         )
 
     boxes = boxes[conf_mask]
@@ -301,8 +292,8 @@ def detect_pots(image, text_prompt="pot", threshold=0.01, text_threshold=0):
             to_drop = is_small & is_low_conf
 
             if np.any(to_drop):
-                log_debug(
-                    f"DEBUG: Hybrid Filter dropped {np.sum(to_drop)} boxes. Areas: {areas[to_drop]}, Confidences: {confidences[to_drop]}"
+                logger.debug(
+                    f"Hybrid Filter dropped {np.sum(to_drop)} boxes. Areas: {areas[to_drop]}, Confidences: {confidences[to_drop]}"
                 )
                 keep_mask = ~to_drop
                 boxes = boxes[keep_mask]
@@ -312,7 +303,7 @@ def detect_pots(image, text_prompt="pot", threshold=0.01, text_threshold=0):
     kept = apply_nms(boxes, confidences, iou_threshold=0.55)
     if np.sum(kept) < len(boxes):
         dropped = ~kept
-        log_debug(f"DEBUG: NMS Filter dropped {np.sum(dropped)} boxes.")
+        logger.debug(f"NMS Filter dropped {np.sum(dropped)} boxes.")
 
     boxes = boxes[kept]
     confidences = confidences[kept]
