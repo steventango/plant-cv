@@ -1,23 +1,16 @@
-import base64
-import io
 import re
 from pathlib import Path
 
 import pytest
 import requests
-from PIL import Image
+
+from tests.utils import encode_image, decode_image, save_image
 
 # Configuration
 BASE_URL = "http://pipeline:8800"
+BASE_URL = "http://pipeline:8800"
 REFERENCE_IMAGES_DIR = Path(__file__).parent / "test_data" / "reference_images"
-
-
-def encode_image(image_path):
-    """Load and encode image to base64."""
-    image = Image.open(image_path).convert("RGB")
-    buf = io.BytesIO()
-    image.save(buf, format="JPEG")
-    return base64.b64encode(buf.getvalue()).decode("utf-8")
+OUTPUT_DIR = Path("test_output")
 
 
 def get_reference_images():
@@ -62,8 +55,6 @@ def check_image(image_path):
     if expected_count is None:
         return None
 
-    print(f"Testing {image_path.name} (Expected: {expected_count})")
-
     try:
         image_data = encode_image(image_path)
         detect_payload = {
@@ -73,6 +64,16 @@ def check_image(image_path):
         }
 
         resp = requests.post(f"{BASE_URL}/pot/detect", json=detect_payload)
+
+        # Save visualization if available, regardless of status code
+        try:
+            result_json = resp.json()
+            if "visualization" in result_json:
+                vis_image = decode_image(result_json["visualization"])
+                save_image(vis_image, OUTPUT_DIR / f"{image_path.stem}_detect.jpg")
+        except Exception:
+            pass  # Don't fail test if visualization saving fails
+
         if resp.status_code != 200:
             return f"Error for {image_path.name}: {resp.text}"
         resp.raise_for_status()
@@ -114,4 +115,4 @@ def test_pot_detection_count_parallel():
                 errors.append(error)
 
     if errors:
-        pytest.fail("\n".join(errors))
+        pytest.fail(f"Errors: {len(errors)}\n\n" + "\n".join(errors))

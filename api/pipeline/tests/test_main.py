@@ -1,11 +1,8 @@
-import base64
-import io
-from pathlib import Path
-
-import numpy as np
 import pytest
 import requests
-from PIL import Image
+from pathlib import Path
+
+from tests.utils import encode_image, decode_image, decode_masks, save_image
 
 # Configuration
 BASE_URL = "http://pipeline:8800"
@@ -28,34 +25,6 @@ def test_image():
     if not TEST_IMAGE_PATH.exists():
         pytest.skip(f"Test image not found: {TEST_IMAGE_PATH}")
     return TEST_IMAGE_PATH
-
-
-def encode_image(image_path):
-    """Load and encode image to base64."""
-    image = Image.open(image_path).convert("RGB")
-    buf = io.BytesIO()
-    image.save(buf, format="JPEG")
-    return base64.b64encode(buf.getvalue()).decode("utf-8")
-
-
-def decode_image(image_data):
-    """Decode base64 to PIL Image."""
-    image_bytes = base64.b64decode(image_data)
-    return Image.open(io.BytesIO(image_bytes)).convert("RGB")
-
-
-def decode_masks(masks_b64):
-    """Decode base64 numpy array."""
-    masks_bytes = io.BytesIO(base64.b64decode(masks_b64))
-    return np.load(masks_bytes)
-
-
-def save_image(image, path):
-    """Save PIL Image to path."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if isinstance(image, np.ndarray):
-        image = Image.fromarray(image.astype(np.uint8))
-    image.save(path)
 
 
 def test_health():
