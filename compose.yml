@@ -27,62 +27,6 @@ services:
               capabilities:
                 - gpu
 
-  grounding-dino:
-    build:
-      args:
-        USERNAME: ${USERNAME}
-        USER_UID: ${HOST_UID}
-        USER_GID: ${HOST_GID}
-      context: api/grounding_dino
-      dockerfile: Dockerfile
-    env_file: .env
-    networks:
-      - plant-network
-    privileged: true
-    restart: unless-stopped
-    user: "${HOST_UID}:${HOST_GID}"
-    volumes:
-      - ./api/grounding_dino:/app
-      - ~/.cache:/home/${USERNAME}/.cache:cached
-    ports:
-      - "8801:8801"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities:
-                - gpu
-
-  segment-anything:
-    build:
-      args:
-        USERNAME: ${USERNAME}
-        USER_UID: ${HOST_UID}
-        USER_GID: ${HOST_GID}
-      context: api/segment_anything
-      dockerfile: Dockerfile
-    env_file: .env
-    networks:
-      - plant-network
-    privileged: true
-    restart: unless-stopped
-    user: "${HOST_UID}:${HOST_GID}"
-    volumes:
-      - ./api/segment_anything:/app
-      - ~/.cache:/home/${USERNAME}/.cache:cached
-    ports:
-      - "8802:8802"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities:
-                - gpu
-
   pipeline:
     build:
       args:
@@ -104,8 +48,6 @@ services:
       - ~/.cache:/home/${USERNAME}/.cache:cached
     depends_on:
       - embeddings
-      - grounding-dino
-      - segment-anything
 
 networks:
   plant-network:
