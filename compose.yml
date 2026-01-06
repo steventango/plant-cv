@@ -27,6 +27,34 @@ services:
               capabilities:
                 - gpu
 
+  sam3:
+    build:
+      args:
+        USERNAME: ${USERNAME}
+        USER_UID: ${HOST_UID}
+        USER_GID: ${HOST_GID}
+      context: api/sam3
+      dockerfile: Dockerfile
+    env_file: .env
+    networks:
+      - plant-network
+    privileged: true
+    restart: unless-stopped
+    user: "${HOST_UID}:${HOST_GID}"
+    volumes:
+      - ./api/sam3:/app
+      - ~/.cache:/home/${USERNAME}/.cache:cached
+    ports:
+      - "8805:8805"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities:
+                - gpu
+
   pipeline:
     build:
       args:
@@ -48,6 +76,7 @@ services:
       - ~/.cache:/home/${USERNAME}/.cache:cached
     depends_on:
       - embeddings
+      - sam3
 
 networks:
   plant-network:
