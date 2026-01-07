@@ -3,7 +3,7 @@ import logging
 import numpy as np
 from PIL import Image
 
-from app.utils import call_grounding_dino_api, call_sam3_api
+from app.utils import call_sam3_api
 
 # logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -193,129 +193,6 @@ def order_boxes(boxes):
     ys = (boxes[:, 1] + boxes[:, 3]) / 2
     order = np.lexsort((xs, ys))
     return order
-
-
-def detect_pots(image, text_prompt="pot", threshold=0.01, text_threshold=0):
-    """
-    Detect pots in an image and filter outliers.
-
-    Args:
-        image: PIL Image or numpy array
-        text_prompt: Text prompt for detection (default: "pot")
-        threshold: Confidence threshold
-        text_threshold: Text threshold
-
-    Returns:
-        boxes: Filtered numpy array of boxes [x1, y1, x2, y2] in grid order
-        confidences: Filtered confidence scores
-        class_names: Filtered class names
-    """
-    if isinstance(image, np.ndarray):
-        image_np = image
-        image = Image.fromarray(image)
-    else:
-        image_np = np.array(image)
-
-    boxes, confidences, class_names = call_grounding_dino_api(
-        image=image,
-        text_prompt=text_prompt,
-        threshold=threshold,
-        text_threshold=text_threshold,
-    )
-    boxes, confidences, class_names = call_grounding_dino_api(
-        image=image,
-        text_prompt=text_prompt,
-        threshold=threshold,
-        text_threshold=text_threshold,
-    )
-    logger.debug(f"Model returned {len(boxes)} boxes.")
-
-    if len(boxes) == 0:
-        return boxes, confidences, class_names
-
-    ar_mask = filter_by_aspect_ratio(boxes, low=0.5, high=1.5)
-    boxes = boxes[ar_mask]
-    confidences = confidences[ar_mask]
-    class_names = class_names[ar_mask]
-
-    widths = np.clip(boxes[:, 2] - boxes[:, 0], a_min=0, a_max=None)
-    heights = np.clip(boxes[:, 3] - boxes[:, 1], a_min=0, a_max=None)
-    areas = widths * heights
-
-    inlier_mask = filter_by_areas(boxes, areas, image_np, confidences=confidences)
-    boxes = boxes[inlier_mask]
-    confidences = confidences[inlier_mask]
-
-    if len(confidences) > 0:
-        logger.debug(f"Post-Area Filter Confidences: {np.sort(confidences)}")
-
-    class_names = (
-        class_names[inlier_mask]
-        if class_names.shape[0] == inlier_mask.shape[0]
-        else class_names
-    )
-
-    conf_mask = filter_by_confidence(confidences)
-    if np.sum(conf_mask) < len(boxes):
-        dropped = ~conf_mask
-        logger.debug(
-            f"Confidence Filter dropped {np.sum(dropped)} boxes. Confidences of dropped: {confidences[dropped]}"
-        )
-
-    boxes = boxes[conf_mask]
-    confidences = confidences[conf_mask]
-    class_names = (
-        class_names[conf_mask]
-        if class_names.shape[0] == conf_mask.shape[0]
-        else class_names
-    )
-
-    # Hybrid Filter: Drop boxes that are BOTH small AND low confidence
-    # This targets "weed" false positives that look somewhat like pots but are statistically weak
-    if len(boxes) >= 2:
-        widths = np.clip(boxes[:, 2] - boxes[:, 0], a_min=0, a_max=None)
-        heights = np.clip(boxes[:, 3] - boxes[:, 1], a_min=0, a_max=None)
-        areas = widths * heights
-        img_area = image_np.shape[0] * image_np.shape[1]
-
-        # Recalculate robust median of surviving boxes
-        stats_areas = areas[areas <= 0.2 * img_area]
-        if len(stats_areas) < 2:
-            stats_areas = areas
-
-        if len(stats_areas) > 0:
-            median_area = float(np.median(stats_areas))
-
-            # Condition: Area < 60% of Median AND Confidence < 0.08
-            is_small = areas < (median_area * 0.6)
-            is_low_conf = confidences < 0.08
-            to_drop = is_small & is_low_conf
-
-            if np.any(to_drop):
-                logger.debug(
-                    f"Hybrid Filter dropped {np.sum(to_drop)} boxes. Areas: {areas[to_drop]}, Confidences: {confidences[to_drop]}"
-                )
-                keep_mask = ~to_drop
-                boxes = boxes[keep_mask]
-                confidences = confidences[keep_mask]
-                class_names = class_names[keep_mask]
-
-    kept = apply_nms(boxes, confidences, iou_threshold=0.55)
-    if np.sum(kept) < len(boxes):
-        dropped = ~kept
-        logger.debug(f"NMS Filter dropped {np.sum(dropped)} boxes.")
-
-    boxes = boxes[kept]
-    confidences = confidences[kept]
-    class_names = class_names[kept]
-
-    if len(boxes) > 0:
-        order = order_boxes(boxes)
-        boxes = boxes[order]
-        confidences = confidences[order]
-        class_names = class_names[order]
-
-    return boxes, confidences, class_names
 
 
 def filter_clipped_pots(boxes, areas, image_shape, margin=1, area_threshold=0.7):

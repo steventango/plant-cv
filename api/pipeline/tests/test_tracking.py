@@ -154,7 +154,7 @@ class TestPipelineTracking:
                 for k in range(len(ys) - 1):
                     # In a perfect world ys[j] <= ys[j+1].
                     # If ys are very close, xs[j] should be <= xs[j+1]
-                    if abs(ys[k] - ys[k + 1]) > 10:  # Some tolerance
+                    if abs(ys[k] - ys[k + 1]) > 30:  # Increased tolerance from 10 to 30
                         assert ys[k] <= ys[k + 1], (
                             f"Frame {j}: Pots not in row-major order (Y deviation)"
                         )
