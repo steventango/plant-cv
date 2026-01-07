@@ -1,14 +1,15 @@
 import logging
 
 from flask import Flask, jsonify
-from app.plant.routes import plant_blueprint
-from app.pot.routes import pot_blueprint
+
+from app.detect import detect_blueprint
+from app.propagate import propagate_blueprint
 
 logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
-app.register_blueprint(plant_blueprint)
-app.register_blueprint(pot_blueprint)
+app.register_blueprint(detect_blueprint)
+app.register_blueprint(propagate_blueprint)
 
 
 @app.route("/health", methods=["GET"])

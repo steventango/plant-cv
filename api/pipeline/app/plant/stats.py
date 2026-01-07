@@ -1,5 +1,8 @@
 import numpy as np
 from plantcv import plantcv as pcv
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_scale_factor(
@@ -63,8 +66,13 @@ def analyze_plant_mask(
     image_height, image_width = warped_image_np.shape[:2]
     scale = calculate_scale_factor(image_width, pot_size_mm, margin)
 
-    # Prepare labeled mask for PlantCV (label 1 for plant)
     labeled_mask = np.where(mask_binary > 0, 1, 0).astype(np.uint8)
+    n_pixels = np.sum(labeled_mask)
+    print(
+        f"DEBUG: Analyze plant mask: scale={scale:.4f}, plant_pixels={n_pixels}",
+        flush=True,
+    )
+    logger.error(f"Analyze plant mask: scale={scale:.4f}, plant_pixels={n_pixels}")
 
     # Set PlantCV parameters
     pcv.params.line_thickness = 2
@@ -74,12 +82,22 @@ def analyze_plant_mask(
     pcv.outputs.clear()
 
     try:
+        # Size analysis
         analysis_image = pcv.analyze.size(
             img=warped_image_np, labeled_mask=labeled_mask, n_labels=1
         )
 
+        # Color analysis
+        pcv.analyze.color(
+            rgb_img=warped_image_np,
+            labeled_mask=labeled_mask,
+            n_labels=1,
+            colorspaces="all",
+        )
+
     except Exception as e:
         # Return empty stats if analysis fails
+        logger.error(f"PlantCV analysis failed: {e}")
         return {
             "area": 0.0,
             "convex_hull_area": 0.0,
@@ -99,17 +117,21 @@ def analyze_plant_mask(
             "ellipse_angle": 0.0,
             "ellipse_eccentricity": 0.0,
             "error": str(e),
-        }
+        }, None
 
     stats = {}
 
-    observation = next(iter(pcv.outputs.observations.values()))
-
-    for variable, value in observation.items():
-        if variable in ["center_of_mass", "ellipse_center"]:
-            stats[variable + "_x"], stats[variable + "_y"] = value["value"]
-        else:
-            stats[variable] = value["value"]
+    # pcv.outputs.observations is a dict of observations
+    # For analyze.size and analyze.color, they usually share the same sample name if n_labels=1
+    for observation_label, observation in pcv.outputs.observations.items():
+        for variable, value in observation.items():
+            if variable in ["center_of_mass", "ellipse_center"]:
+                stats[variable + "_x"], stats[variable + "_y"] = value["value"]
+            elif variable == "histogram":
+                # Histogram is usually a large list, we might want to skip it or summarize
+                continue
+            else:
+                stats[variable] = value["value"]
 
     stats = convert_px_to_mm(stats, scale)
 

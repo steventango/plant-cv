@@ -3,9 +3,9 @@ import logging
 import numpy as np
 from PIL import Image
 
-from app.utils import call_grounding_dino_api
+from app.utils import call_grounding_dino_api, call_sam3_api
 
-logging.basicConfig(level=logging.INFO)
+# logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -316,3 +316,175 @@ def detect_pots(image, text_prompt="pot", threshold=0.01, text_threshold=0):
         class_names = class_names[order]
 
     return boxes, confidences, class_names
+
+
+def filter_clipped_pots(boxes, areas, image_shape, margin=1, area_threshold=0.7):
+    """
+    Remove boxes that are touching the edge AND have an area significantly smaller than the median.
+    """
+    h, w = image_shape[:2]
+    # boxes are [x1, y1, x2, y2]
+    x1 = boxes[:, 0]
+    y1 = boxes[:, 1]
+    x2 = boxes[:, 2]
+    y2 = boxes[:, 3]
+
+    # Check if touching edge
+    touching_edge = (
+        (x1 < margin) | (y1 < margin) | (x2 > w - margin) | (y2 > h - margin)
+    )
+
+    if not np.any(touching_edge):
+        return np.ones(len(boxes), dtype=bool)
+
+    median_area = np.median(areas)
+    # Filter if touching edge AND area < area_threshold * median
+    small_area = areas < (area_threshold * median_area)
+
+    # We want to DROP if (touching_edge AND small_area)
+    # So we KEEP if NOT (touching_edge AND small_area)
+    keep_mask = ~(touching_edge & small_area)
+
+    if np.sum(keep_mask) < len(boxes):
+        dropped = ~keep_mask
+        logger.debug(
+            f"Clipped Pot Filter dropped {np.sum(dropped)} boxes. Areas: {areas[dropped]}, Median: {median_area}"
+        )
+
+    return keep_mask
+
+
+def detect_pots_sam3(image, state=None):
+    """
+    Detect pots in an image using SAM3 and filter outliers.
+
+    Args:
+        image: PIL Image or numpy array
+        state: Previous pot tracking state (for propagate mode)
+
+
+    Returns:
+        boxes: Filtered numpy array of boxes [x1, y1, x2, y2] in grid order
+        confidences: Filtered confidence scores
+        class_names: Filtered class names
+        state: Updated pot tracking state
+        masks: Filtered list of mask dictionaries
+    """
+
+    if isinstance(image, np.ndarray):
+        image_np = image
+        image = Image.fromarray(image)
+    else:
+        image_np = np.array(image)
+
+    # Determine endpoint based on whether we have previous state
+    if state is None:
+        endpoint = "detect"
+        result = call_sam3_api(
+            image, endpoint=endpoint, text_prompt="plant pot", threshold=0.3
+        )
+    else:
+        endpoint = "propagate"
+        result = call_sam3_api(image, endpoint=endpoint, state=state, threshold=0.3)
+
+    # Extract masks from result
+    masks = result.get("masks", [])
+
+    if len(masks) == 0:
+        return (
+            np.array([]),
+            np.array([]),
+            np.array([]),
+            result.get("state"),
+            [],
+        )
+
+    # Convert mask info to boxes and confidences
+    boxes = np.array([m["box"] for m in masks])
+    confidences = np.array([m["score"] for m in masks])
+    class_names = np.array(["pot"] * len(masks))
+
+    logger.debug(f"SAM3 detected {len(boxes)} pot boxes.")
+
+    if len(boxes) == 0:
+        return (
+            boxes,
+            confidences,
+            class_names,
+            result.get("state"),
+            [],
+        )
+
+    # Helper to filter masks list
+    masks_np = np.array(masks)
+
+    # Apply same filtering logic as detect_pots
+    ar_mask = filter_by_aspect_ratio(boxes, low=0.5, high=1.5)
+    boxes = boxes[ar_mask]
+    confidences = confidences[ar_mask]
+    class_names = class_names[ar_mask]
+    masks_np = masks_np[ar_mask]
+
+    # Filter clipped pots
+    # Access areas from indices that survived previous filters
+    # We need to recompute areas for the currently surviving boxes
+    widths = np.clip(boxes[:, 2] - boxes[:, 0], a_min=0, a_max=None)
+    heights = np.clip(boxes[:, 3] - boxes[:, 1], a_min=0, a_max=None)
+    current_areas = widths * heights
+
+    edge_mask = filter_clipped_pots(boxes, current_areas, image_np.shape, margin=1)
+    boxes = boxes[edge_mask]
+    confidences = confidences[edge_mask]
+    class_names = class_names[edge_mask]
+    masks_np = masks_np[edge_mask]
+
+    if len(boxes) == 0:
+        return (
+            boxes,
+            confidences,
+            class_names,
+            result.get("state"),
+            [],
+        )
+
+    widths = np.clip(boxes[:, 2] - boxes[:, 0], a_min=0, a_max=None)
+    heights = np.clip(boxes[:, 3] - boxes[:, 1], a_min=0, a_max=None)
+    areas = widths * heights
+
+    inlier_mask = filter_by_areas(boxes, areas, image_np, confidences=confidences)
+    boxes = boxes[inlier_mask]
+    confidences = confidences[inlier_mask]
+    class_names = class_names[inlier_mask]
+    masks_np = masks_np[inlier_mask]
+
+    if len(boxes) == 0:
+        return (
+            boxes,
+            confidences,
+            class_names,
+            result.get("state"),
+            [],
+        )
+
+    # Apply NMS
+    kept = apply_nms(boxes, confidences, iou_threshold=0.55)
+    boxes = boxes[kept]
+    confidences = confidences[kept]
+    class_names = class_names[kept]
+    masks_np = masks_np[kept]
+
+    # Order boxes in grid order
+    if len(boxes) > 0:
+        order = order_boxes(boxes)
+        boxes = boxes[order]
+        confidences = confidences[order]
+        class_names = class_names[order]
+        masks_np = masks_np[order]
+
+    return (
+        boxes,
+        confidences,
+        class_names,
+        result.get("state"),
+        masks_np.tolist(),
+    )

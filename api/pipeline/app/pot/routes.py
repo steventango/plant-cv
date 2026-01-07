@@ -5,7 +5,7 @@ import numpy as np
 from flask import Blueprint, jsonify, request
 from app.utils import call_segment_anything_api, decode_image, encode_image
 
-from app.pot.detect import detect_pots
+from app.pot.detect import detect_pots, detect_pots_sam3
 from app.pot.quad import compute_quadrilaterals
 from app.pot.warp import warp_pots
 from app.pot.visualize import (
@@ -55,6 +55,61 @@ def detect():
             "class_names": class_names.tolist()
             if isinstance(class_names, np.ndarray)
             else class_names,
+        }
+
+        if visualize and len(boxes) > 0:
+            image_np = np.array(image)
+            annotated = visualize_pot_detections(image_np, boxes, confidences)
+            response["visualization"] = encode_image(annotated)
+
+        return jsonify(response)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@pot_blueprint.route("/detect-sam3", methods=["POST"])
+def detect_sam3():
+    """
+    Detect pot boxes in an image using SAM3 video tracking.
+    Supports stateful tracking across video frames.
+
+    Input JSON:
+        {
+            "image_data": "base64_encoded_image",
+            "pot_state": "previous_pot_state" (optional, for tracking),
+            "plant_state": "previous_plant_state" (optional, for tracking),
+            "visualize": false (optional)
+        }
+
+    Output JSON:
+        {
+            "boxes": [[x1, y1, x2, y2], ...],
+            "confidences": [0.95, ...],
+            "class_names": ["pot", ...],
+            "pot_state": "serialized_state",
+            "plant_state": "serialized_state",
+            "visualization": "base64_encoded_image" (if visualize=true)
+        }
+    """
+    try:
+        data = request.json
+        image = decode_image(data["image_data"])
+        pot_state = data.get("pot_state")
+        plant_state = data.get("plant_state")
+        visualize = data.get("visualize", False)
+
+        boxes, confidences, class_names, pot_state = detect_pots_sam3(
+            image, state=pot_state
+        )
+
+        response = {
+            "boxes": boxes.tolist() if len(boxes) > 0 else [],
+            "confidences": confidences.tolist() if len(confidences) > 0 else [],
+            "class_names": class_names.tolist()
+            if isinstance(class_names, np.ndarray) and len(class_names) > 0
+            else [],
+            "pot_state": pot_state,
+            "plant_state": plant_state,
         }
 
         if visualize and len(boxes) > 0:

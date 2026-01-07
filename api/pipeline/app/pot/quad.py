@@ -32,13 +32,18 @@ def mask_to_quadrilateral(mask: np.ndarray) -> np.ndarray:
     if mask_u8.sum() == 0:
         raise ValueError("mask_to_quadrilateral received an empty mask")
 
+    # Remove small protrusions using morphological opening
+    kernel = np.ones((5, 5), np.uint8)
+    mask_u8 = cv2.morphologyEx(mask_u8, cv2.MORPH_OPEN, kernel)
+
     # Find largest contour
     contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
-        raise ValueError("No contours found in mask")
+        raise ValueError("No contours found in mask after morphology")
     largest = max(contours, key=cv2.contourArea)
 
     # Approximate the contour to a quadrilateral using approxPolyN
+    # ensure_convex=True (default) approximates with a convex hull
     quad = cv2.approxPolyN(largest, nsides=4)
 
     # Reshape from (4, 1, 2) to (4, 2)
