@@ -169,7 +169,7 @@ class SAM3API(ls.LitAPI):
         self.processor = Sam3VideoProcessor.from_pretrained("facebook/sam3")
 
         # Inference resolution setting
-        self.inference_height = 480
+        self.inference_height = 1008
 
     def decode_request(self, request: dict):
         return request
@@ -194,9 +194,15 @@ class SAM3API(ls.LitAPI):
         """Initialize tracking session for a single prompt."""
         image_data = request["image_data"]
         text_prompt = request.get("text_prompt")
+        threshold = request.get("threshold")
 
         if not text_prompt:
             return {"error": "text_prompt is required for detect"}
+
+        # Update model thresholds if provided
+        if threshold is not None:
+            self.model.score_threshold_detection = float(threshold)
+            self.model.new_det_thresh = float(threshold)
 
         image_np = decode_image(image_data)
         h, w = image_np.shape[:2]
@@ -266,9 +272,15 @@ class SAM3API(ls.LitAPI):
         """Propagate tracking to next frame for a single state."""
         image_data = request["image_data"]
         state = request.get("state")
+        threshold = request.get("threshold")
 
         if not state:
             return {"error": "state is required for propagate"}
+
+        # Update model thresholds if provided
+        if threshold is not None:
+            self.model.score_threshold_detection = float(threshold)
+            self.model.new_det_thresh = float(threshold)
 
         image_np = decode_image(image_data)
         h, w = image_np.shape[:2]
