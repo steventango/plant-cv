@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.12' and sys_platform == 'darwin'",
@@ -1568,7 +1568,7 @@ wheels = [
 [[package]]
 name = "transformers"
 version = "5.0.0.dev0"
-source = { git = "https://github.com/huggingface/transformers#e8c51d1848187b9e58d00bf7d638811686ab2a4b" }
+source = { git = "https://github.com/huggingface/transformers#c7e5b749a6392ea2f42fea983af41f825b0bc78d" }
 dependencies = [
     { name = "filelock" },
     { name = "huggingface-hub" },
