@@ -2,6 +2,7 @@ import base64
 import multiprocessing
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import litserve as ls
@@ -13,9 +14,10 @@ import requests
 sys.path.append(str(Path(__file__).parent.parent / "app"))
 from main import EmbeddingsAPI
 
-# Use the cat image from grounding dino tests
+
 TEST_DIR = Path(__file__).parent / "test_data"
 TEST_IMAGE_PATH = TEST_DIR / "cat.jpg"
+PORT = 8803
 
 
 def encode_image(image_path):
@@ -28,12 +30,12 @@ def encode_image(image_path):
 def run_server_proc(port=8000):
     """Run the server in a separate process."""
     # Initialize API with batch settings as in the main app
-    api = EmbeddingsAPI(max_batch_size=2, batch_timeout=0.01)
+    api = EmbeddingsAPI(max_batch_size=1, batch_timeout=0.01)
     server = ls.LitServer(api)
-    server.run(port=port, num_api_servers=1, generate_client_file=False)
+    server.run(port=port, num_api_servers=2, generate_client_file=False)
 
 
-def start_server(port=8000):
+def start_server(port=PORT):
     """Start the server for testing in a background process."""
     server_process = multiprocessing.Process(
         target=run_server_proc,
@@ -50,9 +52,8 @@ class TestEmbeddings:
 
     @pytest.fixture(scope="class")
     def api_url(self):
-        port = 8933
-        server_process = start_server(port=port)
-        yield f"http://localhost:{port}/predict"
+        server_process = start_server(port=PORT)
+        yield f"http://localhost:{PORT}/predict"
         server_process.kill()
 
     @pytest.fixture(scope="class")
@@ -108,3 +109,44 @@ class TestEmbeddings:
         assert "patch_features" in result
         patch_features = np.array(result["patch_features"])
         assert patch_features.shape == (196, 768)
+
+    def test_batch(self, api_url, image_data):
+        """Test batch processing."""
+        num_images = 64
+        with ThreadPoolExecutor(max_workers=num_images) as executor:
+            futures = [
+                executor.submit(
+                    requests.post,
+                    api_url,
+                    json={
+                        "image_data": image_data,
+                        "embedding_types": ["cls_token"],
+                    },
+                )
+                for _ in range(num_images)
+            ]
+            for future in futures:
+                response = future.result()
+                assert response.status_code == 200, f"Failed: {response.text}"
+                result = response.json()
+                assert "cls_token" in result
+                cls_token = np.array(result["cls_token"])
+                assert cls_token.shape == (768,)
+
+    def test_benchmark(self, api_url, image_data, benchmark):
+        def run():
+            return requests.post(
+                api_url,
+                json={
+                    "image_data": image_data,
+                    "embedding_types": ["cls_token"],
+                },
+            )
+
+        response = benchmark(run)
+        assert response.status_code == 200, f"Failed: {response.text}"
+        result = response.json()
+        assert "cls_token" in result
+        cls_token = np.array(result["cls_token"])
+        assert cls_token.shape == (768,)
+
