@@ -50,7 +50,7 @@ def video_frames():
 
 
 class TestSAM3API:
-    def test_detect(self, service_available, video_frames):
+    def test_detect(self, service_available, video_frames, benchmark):
         """Test detect endpoint with first frame of video."""
         if video_frames is None or len(video_frames) == 0:
             pytest.skip("No video frames loaded")
@@ -69,11 +69,14 @@ class TestSAM3API:
             "text_prompt": TEXT_PROMPT,
         }
 
-        response = requests.post(SAM3_ENDPOINT, json=payload, timeout=30)
+        def detect():
+            return requests.post(SAM3_ENDPOINT, json=payload, timeout=30)
+
+        response = benchmark(detect)
         assert response.status_code == 200, f"Detect failed: {response.text}"
 
         result = response.json()
-        assert "state" in result, "Response missing state"
+        assert "session_id" in result, "Response missing session_id"
         assert "masks" in result, "Response missing masks"
 
         masks = result["masks"]
@@ -85,7 +88,7 @@ class TestSAM3API:
         assert "box" in mask
         assert "score" in mask
 
-    def test_propagate(self, service_available, video_frames):
+    def test_propagate(self, service_available, video_frames, benchmark):
         """Test propagate endpoint with second frame."""
         if video_frames is None or len(video_frames) < 2:
             pytest.skip("Not enough video frames")
@@ -98,7 +101,7 @@ class TestSAM3API:
         if isinstance(frame2, np.ndarray):
             frame2 = Image.fromarray(frame2)
 
-        # 1. Detect on frame 1 to get state
+        # 1. Detect on frame 1 to get session_id
         init_payload = {
             "endpoint": "detect",
             "image_data": encode_pil_image(frame1),
@@ -107,7 +110,7 @@ class TestSAM3API:
         resp1 = requests.post(SAM3_ENDPOINT, json=init_payload, timeout=30)
         assert resp1.status_code == 200
         result1 = resp1.json()
-        state = result1["state"]
+        session_id = result1["session_id"]
         num_detected = len(result1["masks"])
 
         if num_detected == 0:
@@ -117,15 +120,18 @@ class TestSAM3API:
         print(f"Propagating {num_detected} objects to frame 2")
         prop_payload = {
             "endpoint": "propagate",
-            "state": state,
+            "session_id": session_id,
             "image_data": encode_pil_image(frame2),
         }
 
-        resp2 = requests.post(SAM3_ENDPOINT, json=prop_payload, timeout=30)
+        def propagate():
+            return requests.post(SAM3_ENDPOINT, json=prop_payload, timeout=30)
+
+        resp2 = benchmark(propagate)
         assert resp2.status_code == 200, f"Propagate failed: {resp2.text}"
         result2 = resp2.json()
 
-        assert "state" in result2
+        assert "session_id" in result2
         assert "masks" in result2
 
         propagated_masks = result2["masks"]

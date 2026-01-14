@@ -14,10 +14,16 @@ dependencies = [
     "torch>=2.7.0",
     "torchvision",
     "transformers>=4.51.2",
-    "pytest>=8.0.0",
     "kernels>=0.11.5",
     "av",
+    "typing-inspection>=0.4.2",
 ]
 
 [tool.uv.sources]
 transformers = { git = "https://github.com/huggingface/transformers" }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-benchmark>=5.2.3",
+]

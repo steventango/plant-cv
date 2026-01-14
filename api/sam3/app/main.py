@@ -1,16 +1,23 @@
 import base64
 import gc
 import io
+import time
+import uuid
 import zlib
+from collections import OrderedDict
 from contextlib import nullcontext
 
 import cv2
 import litserve as ls
 import numpy as np
 import torch
-from transformers import Sam3VideoModel, Sam3VideoProcessor, Sam3VideoInferenceSession
-
-from .utils import _move_to_device, decode_image, mask_to_contour
+from transformers import (
+    Sam3VideoConfig,
+    Sam3VideoInferenceSession,
+    Sam3VideoModel,
+    Sam3VideoProcessor,
+)
+from utils import _move_to_device, decode_image, mask_to_contour
 
 
 def prune_session(session: Sam3VideoInferenceSession, keep_frames: int = 2):
@@ -45,12 +52,29 @@ def prune_session(session: Sam3VideoInferenceSession, keep_frames: int = 2):
 
 def serialize_state(inference_session: Sam3VideoInferenceSession) -> str:
     """Serialize the entire inference session object to compressed base64 string."""
+    t0 = time.time()
     prune_session(inference_session)
+    t_prune = time.time() - t0
 
     buffer = io.BytesIO()
     torch.save(inference_session, buffer)
-    compressed = zlib.compress(buffer.getvalue())
-    return base64.b64encode(compressed).decode("utf-8")
+    t_save = time.time() - t0 - t_prune
+
+    raw_bytes = buffer.getvalue()
+    raw_size = len(raw_bytes)
+
+    compressed = zlib.compress(raw_bytes)
+    t_compress = time.time() - t0 - t_prune - t_save
+    comp_size = len(compressed)
+
+    b64_str = base64.b64encode(compressed).decode("utf-8")
+    t_b64 = time.time() - t0 - t_prune - t_save - t_compress
+
+    print(
+        f"DEBUG: serialize raw={raw_size / 1e6:.2f}MB, comp={comp_size / 1e6:.2f}MB, timings: prune:{t_prune:.3f}s, save:{t_save:.3f}s, compress:{t_compress:.3f}s, b64:{t_b64:.3f}s",
+        flush=True,
+    )
+    return b64_str
 
 
 def deserialize_state(state_str: str, device: str) -> Sam3VideoInferenceSession:
@@ -77,31 +101,56 @@ def deserialize_state(state_str: str, device: str) -> Sam3VideoInferenceSession:
     return session
 
 
+class SessionCache:
+    """In-memory cache for SAM3 inference sessions."""
+
+    def __init__(self, max_size: int):
+        self.cache = OrderedDict()
+        self.max_size = max_size
+
+    def get(self, session_id: str) -> Sam3VideoInferenceSession:
+        if session_id in self.cache:
+            self.cache.move_to_end(session_id)
+            return self.cache[session_id]
+        # TODO: load from checkpoint
+        return None
+
+    def set(self, session_id: str, session: Sam3VideoInferenceSession):
+        if session_id in self.cache:
+            self.cache.move_to_end(session_id)
+        self.cache[session_id] = session
+        # TODO: save checkpoint
+        if len(self.cache) > self.max_size:
+            self.cache.popitem(last=False)
+            gc.collect()
+            torch.cuda.empty_cache()
+
+
 def process_outputs(
     processor: Sam3VideoProcessor,
     session: Sam3VideoInferenceSession,
     model_outputs: dict,
     inference_size: tuple[int, int],
     original_size: tuple[int, int],
-) -> list:
-    """Process model outputs into mask info list with manual upscaling."""
+) -> dict:
+    """Process model outputs into mask info dictionary grouped by prompt."""
     inf_h, inf_w = inference_size
     orig_h, orig_w = original_size
 
     # Process to inference resolution first
-    # This ensures internal padding/offset correction is relative to the 480p image
     processed = processor.postprocess_outputs(
         session,
         model_outputs,
         original_sizes=[[inf_h, inf_w]],
     )
 
-    masks_list = []
     obj_ids = processed.get("object_ids", [])
     masks = processed.get("masks", torch.tensor([]))
     boxes = processed.get("boxes", torch.tensor([]))
     scores = processed.get("scores", torch.tensor([]))
+    prompt_to_obj_ids = processed.get("prompt_to_obj_ids", {})
 
+    total_masks_list = []
     if len(obj_ids) > 0:
         masks_np = masks.to(torch.float32).cpu().numpy().astype(bool)
         boxes_np = boxes.to(torch.float32).cpu().numpy()
@@ -112,7 +161,11 @@ def process_outputs(
             else np.array(obj_ids)
         )
 
-        # Calculate manual scale factors to map back to true original image
+        print(
+            f"DEBUG: SAM3 reporting {len(ids_np)} objects: {ids_np.tolist()} with scores: {scores_np.tolist()}",
+            flush=True,
+        )
+
         scale_x = orig_w / inf_w
         scale_y = orig_h / inf_h
 
@@ -122,17 +175,16 @@ def process_outputs(
             if mask.ndim == 3:
                 mask = mask.squeeze(0)
 
-            # Manually upscale mask to original resolution
-            mask_high = (
-                cv2.resize(
-                    mask.astype(np.uint8),
-                    (orig_w, orig_h),
-                    interpolation=cv2.INTER_LINEAR,
-                )
-                > 0.5
-            )
+            # Find contour on low-res mask
+            contour_low = mask_to_contour(mask)
 
-            # Manually upscale box to original resolution
+            # Rescale contour points mathematically (faster than resizing mask)
+            contour_high = []
+            if contour_low:
+                contour_np = np.array(contour_low)
+                contour_scaled = contour_np * [scale_x, scale_y]
+                contour_high = contour_scaled.tolist()
+
             box_high = [
                 float(box[0] * scale_x),
                 float(box[1] * scale_y),
@@ -140,17 +192,16 @@ def process_outputs(
                 float(box[3] * scale_y),
             ]
 
-            contour = mask_to_contour(mask_high)
-            masks_list.append(
+            total_masks_list.append(
                 {
                     "object_id": int(obj_id),
-                    "contour": contour,
+                    "contour": contour_high,
                     "box": box_high,
                     "score": float(score),
                 }
             )
 
-    return masks_list
+    return {"masks": total_masks_list, "prompt_to_obj_ids": prompt_to_obj_ids}
 
 
 class SAM3API(ls.LitAPI):
@@ -163,13 +214,17 @@ class SAM3API(ls.LitAPI):
             torch.backends.cudnn.allow_tf32 = True
 
         # Load SAM3 Video Model
-        self.model = Sam3VideoModel.from_pretrained("facebook/sam3").to(
-            device, dtype=torch.bfloat16
-        )
+        self.config = Sam3VideoConfig.from_pretrained("facebook/sam3")
+        self.model = Sam3VideoModel.from_pretrained(
+            "facebook/sam3", config=self.config
+        ).to(device, dtype=torch.bfloat16)
         self.processor = Sam3VideoProcessor.from_pretrained("facebook/sam3")
 
         # Inference resolution setting
         self.inference_height = 1008
+
+        # Initialize session cache
+        self.session_cache = SessionCache(max_size=24)
 
     def decode_request(self, request: dict):
         return request
@@ -190,22 +245,82 @@ class SAM3API(ls.LitAPI):
         else:
             return {"error": f"Unknown endpoint: {endpoint}"}
 
+    def _update_config(self, request: dict):
+        self.model.score_threshold_detection = float(
+            request.get(
+                "score_threshold_detection", self.config.score_threshold_detection
+            )
+        )
+        self.model.new_det_thresh = float(
+            request.get("new_det_thresh", self.config.new_det_thresh)
+        )
+        self.model.high_conf_thresh = float(
+            request.get("high_conf_thresh", self.config.high_conf_thresh)
+        )
+        self.model.high_iou_thresh = float(
+            request.get("high_iou_thresh", self.config.high_iou_thresh)
+        )
+        self.model.recondition_every_nth_frame = int(
+            request.get(
+                "recondition_every_nth_frame", self.config.recondition_every_nth_frame
+            )
+        )
+        self.model.max_num_objects = int(
+            request.get("max_num_objects", self.config.max_num_objects)
+        )
+        self.model.recondition_on_trk_masks = bool(
+            request.get(
+                "recondition_on_trk_masks", self.config.recondition_on_trk_masks
+            )
+        )
+        self.model.det_nms_thresh = float(
+            request.get("det_nms_thresh", self.config.det_nms_thresh)
+        )
+        self.model.assoc_iou_thresh = float(
+            request.get("assoc_iou_thresh", self.config.assoc_iou_thresh)
+        )
+        self.model.trk_assoc_iou_thresh = float(
+            request.get("trk_assoc_iou_thresh", self.config.trk_assoc_iou_thresh)
+        )
+        self.model.init_trk_keep_alive = int(
+            request.get("init_trk_keep_alive", self.config.init_trk_keep_alive)
+        )
+        self.model.max_trk_keep_alive = int(
+            request.get("max_trk_keep_alive", self.config.max_trk_keep_alive)
+        )
+        self.model.min_trk_keep_alive = int(
+            request.get("min_trk_keep_alive", self.config.min_trk_keep_alive)
+        )
+        self.model.fill_hole_area = int(
+            request.get("fill_hole_area", self.config.fill_hole_area)
+        )
+        self.model.low_res_mask_size = int(
+            request.get("low_res_mask_size", self.config.low_res_mask_size)
+        )
+        self.model.hotstart_delay = int(
+            request.get("hotstart_delay", self.config.hotstart_delay)
+        )
+        self.model.suppress_overlapping_based_on_recent_occlusion_threshold = float(
+            request.get(
+                "suppress_overlapping_based_on_recent_occlusion_threshold",
+                self.config.suppress_overlapping_based_on_recent_occlusion_threshold,
+            )
+        )
+
     def _detect(self, request: dict):
         """Initialize tracking session for a single prompt."""
+        t_start = time.time()
         image_data = request["image_data"]
         text_prompt = request.get("text_prompt")
-        threshold = request.get("threshold")
 
         if not text_prompt:
             return {"error": "text_prompt is required for detect"}
 
-        # Update model thresholds if provided
-        if threshold is not None:
-            self.model.score_threshold_detection = float(threshold)
-            self.model.new_det_thresh = float(threshold)
+        self._update_config(request)
 
         image_np = decode_image(image_data)
         h, w = image_np.shape[:2]
+        t_decode = time.time() - t_start
 
         with (
             torch.inference_mode(),
@@ -223,7 +338,6 @@ class SAM3API(ls.LitAPI):
                 max_vision_features_cache_size=1,
             )
 
-            # Add text prompt
             self.processor.add_text_prompt(
                 inference_session=session,
                 text=text_prompt,
@@ -240,50 +354,54 @@ class SAM3API(ls.LitAPI):
                 device=self.device,
                 return_tensors="pt",
             )
+            t_pre = time.time() - t_start - t_decode
 
             # Run inference
             model_outputs = self.model(
                 inference_session=session,
                 frame=inputs.pixel_values[0],
             )
+            t_model = time.time() - t_start - t_decode - t_pre
 
-            # Process outputs
-            masks_list = process_outputs(
+            processed_results = process_outputs(
                 self.processor,
                 session,
                 model_outputs,
                 inference_size=(self.inference_height, inference_width),
                 original_size=(h, w),
             )
+            t_post = time.time() - t_start - t_decode - t_pre - t_model
 
-            # Serialize state
-            state_str = serialize_state(session)
+            # Update cache and return session_id
+            session_id = str(uuid.uuid4())
+            self.session_cache.set(session_id, session)
+            t_serialize = time.time() - t_start - t_decode - t_pre - t_model - t_post
 
-            results = {"state": state_str, "masks": masks_list}
-
-            del session, model_outputs, inputs
+            results = {"session_id": session_id, **processed_results}
+            del model_outputs, inputs
 
         gc.collect()
         torch.cuda.empty_cache()
+
+        t_total = time.time() - t_start
+        print(
+            f"TIMING: detect total {t_total:.4f}s (decode:{t_decode:.4f}, pre:{t_pre:.4f}, model:{t_model:.4f}, post:{t_post:.4f}, serialize:{t_serialize:.4f})",
+            flush=True,
+        )
 
         return results
 
     def _propagate(self, request: dict):
         """Propagate tracking to next frame for a single state."""
+        t_start = time.time()
         image_data = request["image_data"]
-        state = request.get("state")
-        threshold = request.get("threshold")
+        session_id = request["session_id"]
 
-        if not state:
-            return {"error": "state is required for propagate"}
-
-        # Update model thresholds if provided
-        if threshold is not None:
-            self.model.score_threshold_detection = float(threshold)
-            self.model.new_det_thresh = float(threshold)
+        self._update_config(request)
 
         image_np = decode_image(image_data)
         h, w = image_np.shape[:2]
+        t_decode = time.time() - t_start
 
         with (
             torch.inference_mode(),
@@ -291,9 +409,14 @@ class SAM3API(ls.LitAPI):
             if self.device == "cuda"
             else nullcontext(),
         ):
-            session = deserialize_state(state, self.device)
+            # Load session
+            t_deserialize = 0
+            session = self.session_cache.get(session_id)
+            if session is None:
+                return {"error": "Session expired or not found in cache"}
+            t_deserialize = time.time() - t_start - t_decode
 
-            # Process frame - resize for memory efficiency
+            # Resize frame
             inference_width = int(w * (self.inference_height / h))
             image_resized = cv2.resize(
                 image_np, (inference_width, self.inference_height)
@@ -304,26 +427,44 @@ class SAM3API(ls.LitAPI):
                 device=self.device,
                 return_tensors="pt",
             )
+            t_pre = time.time() - t_start - t_decode - t_deserialize
+
+            # Clear GPU memory and prune session before inference to limit memory growth
+            torch.cuda.empty_cache()
+            prune_session(session)
+
             model_outputs = self.model(
                 inference_session=session,
                 frame=inputs.pixel_values[0],
             )
-            masks_list = process_outputs(
+            t_model = time.time() - t_start - t_decode - t_deserialize - t_pre
+
+            processed_results = process_outputs(
                 self.processor,
                 session,
                 model_outputs,
                 inference_size=(self.inference_height, inference_width),
                 original_size=(h, w),
             )
+            t_post = time.time() - t_start - t_decode - t_deserialize - t_pre - t_model
 
-            state_str = serialize_state(session)
+            # Update cache
+            t_cache_update = 0
+            t_cache_start = time.time()
+            self.session_cache.set(session_id, session)
+            t_cache_update = time.time() - t_cache_start
 
-            results = {"state": state_str, "masks": masks_list}
-
-            del session, model_outputs, inputs
+            results = {"session_id": session_id, **processed_results}
+            del model_outputs, inputs
 
         gc.collect()
         torch.cuda.empty_cache()
+
+        t_total = time.time() - t_start
+        print(
+            f"TIMING: propagate total {t_total:.4f}s (decode:{t_decode:.4f}, deserialize:{t_deserialize:.4f}, pre:{t_pre:.4f}, model:{t_model:.4f}, post:{t_post:.4f}, cache_update:{t_cache_update:.4f})",
+            flush=True,
+        )
 
         return results
 
