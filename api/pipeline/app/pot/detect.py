@@ -210,9 +210,6 @@ def filter_pot_masks(masks, image_np, apply_nms_flag=False):
     if not masks:
         return []
 
-    original_count = len(masks)
-    logger.debug(f"filter_pot_masks: starting with {original_count} masks")
-
     # Convert mask info to boxes and confidences
     boxes = np.array([m["box"] for m in masks])
     confidences = np.array([m["score"] for m in masks])
@@ -220,7 +217,7 @@ def filter_pot_masks(masks, image_np, apply_nms_flag=False):
 
     # 1. Aspect ratio filter
     ar_mask = filter_by_aspect_ratio(boxes, low=0.5, high=1.5)
-    logger.debug(f"AR Filter: kept {np.sum(ar_mask)}/{len(boxes)}")
+    logger.info(f"AR Filter: kept {np.sum(ar_mask)}/{len(boxes)}")
     boxes = boxes[ar_mask]
     confidences = confidences[ar_mask]
     masks_np = masks_np[ar_mask]
@@ -234,7 +231,7 @@ def filter_pot_masks(masks, image_np, apply_nms_flag=False):
     current_areas = widths * heights
 
     edge_mask = filter_clipped_pots(boxes, current_areas, image_np.shape, margin=1)
-    logger.debug(f"Clipped Filter: kept {np.sum(edge_mask)}/{len(boxes)}")
+    logger.info(f"Clipped Filter: kept {np.sum(edge_mask)}/{len(boxes)}")
     boxes = boxes[edge_mask]
     confidences = confidences[edge_mask]
     masks_np = masks_np[edge_mask]
@@ -248,7 +245,7 @@ def filter_pot_masks(masks, image_np, apply_nms_flag=False):
     areas = widths * heights
 
     inlier_mask = filter_by_areas(boxes, areas, image_np, confidences=confidences)
-    logger.debug(f"Area Filter: kept {np.sum(inlier_mask)}/{len(boxes)}")
+    logger.info(f"Area Filter: kept {np.sum(inlier_mask)}/{len(boxes)}")
     boxes = boxes[inlier_mask]
     confidences = confidences[inlier_mask]
     masks_np = masks_np[inlier_mask]
@@ -280,7 +277,6 @@ def detect_pots_sam3(image, state=None, extra_prompts=None, **kwargs):
     Args:
         image: PIL Image or numpy array
         state: Previous pot tracking state (for propagate mode)
-        extra_prompts: Optional list of additional text prompts to detect simultaneously
         **kwargs: Additional parameters for SAM3 (e.g., threshold, recondition_every_nth_frame)
 
 
@@ -299,32 +295,18 @@ def detect_pots_sam3(image, state=None, extra_prompts=None, **kwargs):
     else:
         image_np = np.array(image)
 
-    # Default threshold for pots if not provided
     if "score_threshold_detection" not in kwargs:
         kwargs["score_threshold_detection"] = 0.3
 
     # Determine endpoint based on whether we have previous state
     if state is None:
-        endpoint = "detect"
-        prompts = ["plant pot"]
-        if extra_prompts:
-            if isinstance(extra_prompts, list):
-                prompts.extend(extra_prompts)
-            else:
-                prompts.append(extra_prompts)
-
-        result = call_sam3_api(image, endpoint=endpoint, text_prompt=prompts, **kwargs)
+        result = call_sam3_api(
+            image, endpoint="detect", text_prompt="plant pot", **kwargs
+        )
     else:
-        endpoint = "propagate"
-        result = call_sam3_api(image, endpoint=endpoint, state=state, **kwargs)
+        result = call_sam3_api(image, endpoint="propagate", state=state, **kwargs)
 
-    # If multiple prompts were used, masks are grouped by prompt
-    prompt_masks = result.get("prompt_masks", {})
-    if prompt_masks:
-        # Use "plant pot" masks if available, otherwise fallback to all masks
-        masks = prompt_masks.get("plant pot", result.get("masks", []))
-    else:
-        masks = result.get("masks", [])
+    masks = result.get("masks", [])
 
     filtered_masks = filter_pot_masks(masks, image_np, apply_nms_flag=True)
 
