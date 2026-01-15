@@ -1,10 +1,8 @@
 import logging
 
-import cv2
 import numpy as np
 from flask import Blueprint, jsonify, request
 
-from app.plant.segment import preprocess_for_otsu, refine_mask_with_otsu
 from app.pot.detect import (
     filter_by_areas,
     filter_by_aspect_ratio,
@@ -19,6 +17,7 @@ from app.utils import (
     encode_image,
     order_masks_row_major,
     process_pot_stats,
+    refine_plant_masks,
     refine_pot_masks_with_plants,
     unwrap_state,
     wrap_state,
@@ -66,7 +65,10 @@ def propagate():
 
         if pot_state:
             pot_result = call_sam3_api(
-                image, endpoint="propagate", state=sam3_pot_state, score_threshold_detection=0.15
+                image,
+                endpoint="propagate",
+                state=sam3_pot_state,
+                score_threshold_detection=0.15,
             )
 
             # Apply ID mapping
@@ -110,7 +112,9 @@ def propagate():
             remapped_pot_masks, updated_id_map = apply_id_mapping(p_masks_raw, id_map)
             pot_masks = remapped_pot_masks
 
-            response["pot_state"] = wrap_state(pot_result.get("session_id"), updated_id_map)
+            response["pot_state"] = wrap_state(
+                pot_result.get("session_id"), updated_id_map
+            )
 
         if plant_state:
             # For the plant SAM3 request, we want to run mask reconditioning every frame
@@ -136,53 +140,7 @@ def propagate():
 
         # Refine plant masks (if any) - requires pot_masks for quad-based expansion
         if plant_masks and pot_masks:
-            # First pass: associate plants to pots
-            temp_associations = associate_plants_to_pots(plant_masks, pot_masks)
-
-            preprocessed_gray = preprocess_for_otsu(image_np)
-            refined_plant_masks = []
-            for p in plant_masks:
-                plant_id = str(p["object_id"])
-                pot_id = temp_associations.get(plant_id)
-
-                # Remove plants not associated with a pot
-                if pot_id is None:
-                    continue
-
-                if "contour" in p and p["contour"]:
-                    m = np.zeros((h, w), dtype=np.uint8)
-                    cv2.fillPoly(m, [np.array(p["contour"], dtype=np.int32)], 1)
-                    orig_area = np.sum(m)
-
-                    refined_m = refine_mask_with_otsu(m, preprocessed_gray)
-
-                    refined_area = np.sum(refined_m > 0)
-
-                    if refined_area > 0.05 * orig_area:
-                        contours, _ = cv2.findContours(
-                            refined_m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-                        )
-                        if contours:
-                            p["contours"] = [
-                                c.reshape(-1, 2).tolist() for c in contours
-                            ]
-                            largest_contour = max(contours, key=cv2.contourArea)
-                            p["contour"] = largest_contour.reshape(-1, 2).tolist()
-
-                            all_pts = np.concatenate(
-                                [c.reshape(-1, 2) for c in contours]
-                            )
-                            x, y, w_b, h_b = cv2.boundingRect(all_pts)
-                            p["box"] = [
-                                float(x),
-                                float(y),
-                                float(x + w_b),
-                                float(y + h_b),
-                            ]
-
-                refined_plant_masks.append(p)
-
-            plant_masks = refined_plant_masks
+            plant_masks, _ = refine_plant_masks(image_np, plant_masks, pot_masks)
 
         response["debug_refined_plant_masks_count"] = len(plant_masks)
 

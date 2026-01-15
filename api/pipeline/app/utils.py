@@ -163,6 +163,69 @@ def unwrap_state(wrapped_state):
     return wrapped_state, {}
 
 
+def refine_plant_masks(image_np, plant_masks, pot_masks):
+    """
+    Refine plant masks using Otsu thresholding and associate them with pots.
+    """
+    from app.plant.segment import preprocess_for_otsu, refine_mask_with_otsu
+
+    if not plant_masks or not pot_masks:
+        return plant_masks, {}
+
+    h, w = image_np.shape[:2]
+
+    # First pass: associate plants to pots
+    temp_associations = associate_plants_to_pots(plant_masks, pot_masks)
+
+    logger.debug(f"Refining {len(plant_masks)} plant masks")
+    preprocessed_gray = preprocess_for_otsu(image_np)
+    refined_plant_masks = []
+
+    for p in plant_masks:
+        plant_id = str(p["object_id"])
+        pot_id = temp_associations.get(plant_id)
+
+        # Remove plants not associated with a pot
+        if pot_id is None:
+            logger.debug(f"Plant {plant_id} not associated with pot, removing")
+            continue
+
+        if "contour" in p and p["contour"]:
+            m = np.zeros((h, w), dtype=np.uint8)
+            pts = np.array(p["contour"], dtype=np.int32)
+            if pts.size > 0:
+                cv2.fillPoly(m, [pts], 1)
+
+            orig_area = np.sum(m)
+            refined_m = refine_mask_with_otsu(m, preprocessed_gray)
+            refined_area = np.sum(refined_m > 0)
+
+            # Safety check: if refined mask is too small, it might have failed.
+            if refined_area > 0.05 * orig_area:
+                contours, _ = cv2.findContours(
+                    refined_m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                )
+                if contours:
+                    p["contours"] = [c.reshape(-1, 2).tolist() for c in contours]
+                    largest_contour = max(contours, key=cv2.contourArea)
+                    p["contour"] = largest_contour.reshape(-1, 2).tolist()
+
+                    all_pts = np.concatenate([c.reshape(-1, 2) for c in contours])
+                    x, y, w_b, h_b = cv2.boundingRect(all_pts)
+                    p["box"] = [
+                        float(x),
+                        float(y),
+                        float(x + w_b),
+                        float(y + h_b),
+                    ]
+
+        refined_plant_masks.append(p)
+
+    # Final association pass with refined masks
+    final_associations = associate_plants_to_pots(refined_plant_masks, pot_masks)
+    return refined_plant_masks, final_associations
+
+
 def apply_id_mapping(masks, id_map):
     """Apply ID mapping to masks. Assign new IDs if not present."""
     remapped_masks = []
