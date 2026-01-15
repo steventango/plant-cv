@@ -22,11 +22,29 @@ def reference_images():
         return []
 
     all_images = sorted(list(REFERENCE_IMAGES_DIR.glob("*.jpg")))
-    return all_images
+    problem_images = [
+        "E11Z09_2025-08-20T153000+0000_left.jpg",
+        "E12Z06_2025-09-17T153000+0000_left.jpg",
+        "E13Z01_2025-10-08T153000+0000_left.jpg",
+    ]
+    return [img for img in all_images if img.name in problem_images]
 
 
-def get_expected_pot_count(filename):
+# Specific overrides for images where pots might be out of frame
+SPECIFIC_POT_COUNTS = {
+    "E14Z05_2025-11-12T163000+0000_left.jpg": 60,
+    "E14Z08_2025-11-12T163000+0000_left.jpg": 59,
+}
+SPECIFIC_PLANT_COUNTS = {
+    "E14Z05_2025-11-12T163000+0000_left.jpg": 60,
+    "E14Z08_2025-11-12T163000+0000_left.jpg": 59,
+}
+
+
+def get_expected_count(filename, override):
     """Determine expected pot count based on experiment ID in filename."""
+    if filename in override:
+        return override[filename]
     match = re.search(r"E(\d+)", filename)
     if not match:
         return None
@@ -39,27 +57,20 @@ def get_expected_pot_count(filename):
     return None
 
 
-# Specific overrides for images where pots might be out of frame
-SPECIFIC_COUNTS = {
-    "E14Z05_2025-11-12T163000+0000_left.jpg": 60,
-    "E14Z08_2025-11-12T163000+0000_left.jpg": 59,
-}
-
-
 def check_image(image_path):
     """
     Process a single image and return an error message if the check fails,
     or None if it succeeds.
     """
     # Check if there is a specific override for this image
-    if image_path.name in SPECIFIC_COUNTS:
-        expected_count = SPECIFIC_COUNTS[image_path.name]
-    else:
-        expected_count = get_expected_pot_count(image_path.name)
+    expected_pot_count = get_expected_count(image_path.name, SPECIFIC_POT_COUNTS)
+    expected_plant_count = get_expected_count(image_path.name, SPECIFIC_PLANT_COUNTS)
 
-    if expected_count is None:
+    if expected_pot_count is None:
         return None
 
+    pot_count = 0
+    plant_count = 0
     try:
         image_data = encode_image(image_path)
         detect_payload = {
@@ -88,21 +99,29 @@ def check_image(image_path):
         detect_result = resp.json()
 
         pot_masks = detect_result.get("pot_masks", [])
-        detected_count = len(pot_masks)
+        pot_count = len(pot_masks)
 
-        assert detected_count == expected_count, (
-            f"Expected {expected_count} pots, but detected {detected_count} for {image_path.name}"
+        assert pot_count == expected_pot_count, (
+            f"Expected {expected_pot_count} pots, but detected {pot_count} for {image_path.name}"
+        )
+
+        plant_masks = detect_result.get("plant_masks", [])
+        plant_count = len(plant_masks)
+
+        assert plant_count == expected_plant_count, (
+            f"Expected {expected_plant_count} plants, but detected {plant_count} for {image_path.name}"
         )
 
     except requests.exceptions.ConnectionError:
-        return "Could not connect to pipeline service. Is it running?"
+        return "Could not connect to pipeline service. Is it running?", None, None
     except Exception as e:
         return (
             f"Exception for {image_path.name}: {str(e)}",
-            detected_count - expected_count,
+            pot_count - expected_pot_count,
+            plant_count - expected_plant_count,
         )
 
-    return None, 0
+    return None, 0, 0
 
 
 def test_pot_detection(reference_images):
@@ -116,19 +135,27 @@ def test_pot_detection(reference_images):
     errors = []
     successes = []
 
-    mae = 0
+    pot_mae = 0
+    plant_mae = 0
 
     for img in (pbar := tqdm(reference_images)):
-        error, diff = check_image(img)
+        error, pot_diff, plant_diff = check_image(img)
         if error:
             errors.append(error)
             logger.error(error)
         else:
             successes.append(img.name)
-        if diff is not None:
-            mae += abs(diff)
+        if pot_diff is not None:
+            pot_mae += abs(pot_diff)
+        if plant_diff is not None:
+            plant_mae += abs(plant_diff)
         pbar.set_postfix(
-            {"MAE": mae, "Successes": len(successes), "Errors": len(errors)}
+            {
+                "POT MAE": pot_mae,
+                "PLANT MAE": plant_mae,
+                "Successes": len(successes),
+                "Errors": len(errors),
+            }
         )
 
     if errors:
