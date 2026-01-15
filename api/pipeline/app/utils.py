@@ -75,6 +75,8 @@ def call_sam3_api(
     if "max_num_objects" not in kwargs:
         kwargs["max_num_objects"] = 100
 
+    payload.update(kwargs)
+
     if endpoint == "detect":
         if text_prompt:
             payload["text_prompt"] = text_prompt
