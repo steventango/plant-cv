@@ -200,8 +200,77 @@ def filter_clipped_pots(boxes, areas, image_shape, margin=1, area_threshold=0.7)
         logger.debug(
             f"Clipped Pot Filter dropped {np.sum(dropped)} boxes. Areas: {areas[dropped]}, Median: {median_area}"
         )
-
     return keep_mask
+
+
+def filter_pot_masks(masks, image_np, apply_nms_flag=False):
+    """
+    Apply shared filtering logic to pot masks.
+    """
+    if not masks:
+        return []
+
+    original_count = len(masks)
+    logger.debug(f"filter_pot_masks: starting with {original_count} masks")
+
+    # Convert mask info to boxes and confidences
+    boxes = np.array([m["box"] for m in masks])
+    confidences = np.array([m["score"] for m in masks])
+    masks_np = np.array(masks)
+
+    # 1. Aspect ratio filter
+    ar_mask = filter_by_aspect_ratio(boxes, low=0.5, high=1.5)
+    logger.debug(f"AR Filter: kept {np.sum(ar_mask)}/{len(boxes)}")
+    boxes = boxes[ar_mask]
+    confidences = confidences[ar_mask]
+    masks_np = masks_np[ar_mask]
+
+    if len(boxes) == 0:
+        return []
+
+    # 2. Filter clipped pots
+    widths = np.clip(boxes[:, 2] - boxes[:, 0], a_min=0, a_max=None)
+    heights = np.clip(boxes[:, 3] - boxes[:, 1], a_min=0, a_max=None)
+    current_areas = widths * heights
+
+    edge_mask = filter_clipped_pots(boxes, current_areas, image_np.shape, margin=1)
+    logger.debug(f"Clipped Filter: kept {np.sum(edge_mask)}/{len(boxes)}")
+    boxes = boxes[edge_mask]
+    confidences = confidences[edge_mask]
+    masks_np = masks_np[edge_mask]
+
+    if len(boxes) == 0:
+        return []
+
+    # 3. Area filter
+    widths = np.clip(boxes[:, 2] - boxes[:, 0], a_min=0, a_max=None)
+    heights = np.clip(boxes[:, 3] - boxes[:, 1], a_min=0, a_max=None)
+    areas = widths * heights
+
+    inlier_mask = filter_by_areas(boxes, areas, image_np, confidences=confidences)
+    logger.debug(f"Area Filter: kept {np.sum(inlier_mask)}/{len(boxes)}")
+    boxes = boxes[inlier_mask]
+    confidences = confidences[inlier_mask]
+    masks_np = masks_np[inlier_mask]
+
+    if len(boxes) == 0:
+        return []
+
+    # 4. Apply NMS (Optional)
+    if apply_nms_flag:
+        kept = apply_nms(boxes, confidences, iou_threshold=0.55)
+        logger.debug(f"NMS Filter: kept {np.sum(kept)}/{len(boxes)}")
+        masks_np = masks_np[kept]
+
+    # Order boxes in grid order
+    if len(masks_np) > 0:
+        # Re-extract boxes for ordering if they changed due to NMS
+        final_boxes = np.array([m["box"] for m in masks_np])
+        order = order_boxes(final_boxes)
+        masks_np = masks_np[order]
+
+    logger.debug(f"filter_pot_masks: finished with {len(masks_np)} masks")
+    return masks_np.tolist()
 
 
 def detect_pots_sam3(image, state=None, extra_prompts=None, **kwargs):
@@ -249,7 +318,6 @@ def detect_pots_sam3(image, state=None, extra_prompts=None, **kwargs):
         endpoint = "propagate"
         result = call_sam3_api(image, endpoint=endpoint, state=state, **kwargs)
 
-    # Extract masks from result
     # If multiple prompts were used, masks are grouped by prompt
     prompt_masks = result.get("prompt_masks", {})
     if prompt_masks:
@@ -258,102 +326,28 @@ def detect_pots_sam3(image, state=None, extra_prompts=None, **kwargs):
     else:
         masks = result.get("masks", [])
 
-    if len(masks) == 0:
+    filtered_masks = filter_pot_masks(masks, image_np, apply_nms_flag=True)
+
+    if not filtered_masks:
         return (
             np.array([]),
             np.array([]),
             np.array([]),
             result.get("session_id"),
             [],
+            result,
         )
 
-    # Convert mask info to boxes and confidences
-    boxes = np.array([m["box"] for m in masks])
-    confidences = np.array([m["score"] for m in masks])
-    class_names = np.array(["pot"] * len(masks))
-
-    logger.debug(f"SAM3 detected {len(boxes)} pot boxes.")
-
-    if len(boxes) == 0:
-        return (
-            boxes,
-            confidences,
-            class_names,
-            result.get("session_id"),
-            [],
-        )
-
-    # Helper to filter masks list
-    masks_np = np.array(masks)
-
-    # Apply same filtering logic as detect_pots
-    ar_mask = filter_by_aspect_ratio(boxes, low=0.5, high=1.5)
-    boxes = boxes[ar_mask]
-    confidences = confidences[ar_mask]
-    class_names = class_names[ar_mask]
-    masks_np = masks_np[ar_mask]
-
-    # Filter clipped pots
-    # Access areas from indices that survived previous filters
-    # We need to recompute areas for the currently surviving boxes
-    widths = np.clip(boxes[:, 2] - boxes[:, 0], a_min=0, a_max=None)
-    heights = np.clip(boxes[:, 3] - boxes[:, 1], a_min=0, a_max=None)
-    current_areas = widths * heights
-
-    edge_mask = filter_clipped_pots(boxes, current_areas, image_np.shape, margin=1)
-    boxes = boxes[edge_mask]
-    confidences = confidences[edge_mask]
-    class_names = class_names[edge_mask]
-    masks_np = masks_np[edge_mask]
-
-    if len(boxes) == 0:
-        return (
-            boxes,
-            confidences,
-            class_names,
-            result.get("session_id"),
-            [],
-        )
-
-    widths = np.clip(boxes[:, 2] - boxes[:, 0], a_min=0, a_max=None)
-    heights = np.clip(boxes[:, 3] - boxes[:, 1], a_min=0, a_max=None)
-    areas = widths * heights
-
-    inlier_mask = filter_by_areas(boxes, areas, image_np, confidences=confidences)
-    boxes = boxes[inlier_mask]
-    confidences = confidences[inlier_mask]
-    class_names = class_names[inlier_mask]
-    masks_np = masks_np[inlier_mask]
-
-    if len(boxes) == 0:
-        return (
-            boxes,
-            confidences,
-            class_names,
-            result.get("session_id"),
-            [],
-        )
-
-    # Apply NMS
-    kept = apply_nms(boxes, confidences, iou_threshold=0.55)
-    boxes = boxes[kept]
-    confidences = confidences[kept]
-    class_names = class_names[kept]
-    masks_np = masks_np[kept]
-
-    # Order boxes in grid order
-    if len(boxes) > 0:
-        order = order_boxes(boxes)
-        boxes = boxes[order]
-        confidences = confidences[order]
-        class_names = class_names[order]
-        masks_np = masks_np[order]
+    # Convert back to arrays for the expected return format
+    boxes = np.array([m["box"] for m in filtered_masks])
+    confidences = np.array([m["score"] for m in filtered_masks])
+    class_names = np.array(["pot"] * len(filtered_masks))
 
     return (
         boxes,
         confidences,
         class_names,
         result.get("session_id"),
-        masks_np.tolist(),
+        filtered_masks,
         result,
     )

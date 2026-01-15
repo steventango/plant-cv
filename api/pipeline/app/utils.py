@@ -10,6 +10,7 @@ from PIL import Image
 
 from app.plant.stats import analyze_plant_mask
 from app.pot.quad import mask_to_quadrilateral
+from app.pot.visualize import visualize_pipeline_tracking
 from app.pot.warp import warp_quad_to_square
 
 logger = logging.getLogger(__name__)
@@ -415,3 +416,67 @@ def refine_pot_masks_with_plants(pot_masks, plant_masks, associations, image_sha
                     pot["contour"] = hull.reshape(-1, 2).tolist()
                     x, y, wb, hb = cv2.boundingRect(hull)
                     pot["box"] = [float(x), float(y), float(x + wb), float(y + hb)]
+
+
+def process_pipeline_outputs(
+    image_np,
+    plant_masks,
+    pot_masks_raw,
+    id_map=None,
+    sam3_session_id=None,
+):
+    """
+    Common post-processing for both detect and propagate endpoints.
+    """
+    response = {}
+
+    # 1. ID Mapping
+    if id_map is not None:
+        pot_masks, updated_id_map = apply_id_mapping(pot_masks_raw, id_map)
+    else:
+        # Initial detection case: create ID map based on row-major order
+        sorted_pot_masks = order_masks_row_major(pot_masks_raw)
+        updated_id_map = {}
+        pot_masks = []
+        for new_id, m in enumerate(sorted_pot_masks):
+            old_id = str(m["object_id"])
+            updated_id_map[old_id] = new_id
+            m_new = m.copy()
+            m_new["object_id"] = new_id
+            pot_masks.append(m_new)
+
+    if sam3_session_id is not None:
+        response["pot_state"] = wrap_state(sam3_session_id, updated_id_map)
+
+    # 2. Refine plant masks
+    plant_masks, associations = refine_plant_masks(image_np, plant_masks, pot_masks)
+
+    # 3. Refine pot masks by subtracting plant masks
+    refine_pot_masks_with_plants(pot_masks, plant_masks, associations, image_np.shape)
+
+    # 4. Final ordering and results
+    ordered_pot_masks = order_masks_row_major(pot_masks)
+    plant_stats = process_pot_stats(
+        image_np, ordered_pot_masks, plant_masks, associations
+    )
+
+    response.update(
+        {
+            "pot_masks": ordered_pot_masks,
+            "plant_masks": plant_masks,
+            "associations": associations,
+            "ordered_pot_ids": [m["object_id"] for m in ordered_pot_masks],
+            "plant_stats": plant_stats,
+            "visualization_data": encode_image(
+                visualize_pipeline_tracking(
+                    image_np,
+                    plant_masks,
+                    ordered_pot_masks,
+                    associations,
+                    plant_stats=plant_stats,
+                )
+            ),
+        }
+    )
+
+    return response

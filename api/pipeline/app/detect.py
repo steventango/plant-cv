@@ -4,15 +4,10 @@ import numpy as np
 from flask import Blueprint, jsonify, request
 
 from app.pot.detect import detect_pots_sam3
-from app.pot.visualize import visualize_pipeline_tracking
 from app.utils import (
     call_sam3_api,
     decode_image,
-    encode_image,
-    process_pot_stats,
-    refine_plant_masks,
-    refine_pot_masks_with_plants,
-    wrap_state,
+    process_pipeline_outputs,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,52 +58,17 @@ def detect():
         plant_state_from_sam3 = plant_result["session_id"]
         plant_masks = plant_result.get("masks", [])
 
-        # Create initial ID map for pots based on row-major order
-        id_map = {}
-        ordered_pot_masks = []
-        for new_id, m in enumerate(sorted_pot_masks):
-            old_id = str(m["object_id"])
-            id_map[old_id] = new_id
-            m_new = m.copy()
-            m_new["object_id"] = new_id
-            ordered_pot_masks.append(m_new)
-
-        # Refine plant masks
-        image_np = np.array(image)
-        plant_masks, associations = refine_plant_masks(
-            image_np, plant_masks, ordered_pot_masks
+        # Process all outputs using the shared utility
+        response = process_pipeline_outputs(
+            np.array(image),
+            plant_masks,
+            sorted_pot_masks,
+            sam3_session_id=pot_state_from_sam3,
         )
-
-        # Refine pot masks by subtracting plant masks
-        refine_pot_masks_with_plants(
-            ordered_pot_masks, plant_masks, associations, image_np.shape
-        )
-
-        plant_stats = process_pot_stats(
-            image_np, ordered_pot_masks, plant_masks, associations
-        )
-
-        response = {
-            "pot_state": wrap_state(pot_state_from_sam3, id_map),
-            "plant_state": plant_state_from_sam3,
-            "pot_masks": ordered_pot_masks,
-            "plant_masks": plant_masks,
-            "associations": associations,
-            "ordered_pot_ids": [m["object_id"] for m in ordered_pot_masks],
-            "plant_stats": plant_stats,
-            "visualization_data": encode_image(
-                visualize_pipeline_tracking(
-                    np.array(image),
-                    plant_masks,
-                    ordered_pot_masks,
-                    associations,
-                    plant_stats=plant_stats,
-                )
-            ),
-        }
+        response["plant_state"] = plant_state_from_sam3
 
         logger.info(
-            f"detect: pot_masks={len(ordered_pot_masks)}, ordered_pot_ids={len(response['ordered_pot_ids'])}"
+            f"detect: pot_masks={len(response['pot_masks'])}, ordered_pot_ids={len(response['ordered_pot_ids'])}"
         )
         return jsonify(response)
     except Exception as e:

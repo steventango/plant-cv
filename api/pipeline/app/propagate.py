@@ -3,24 +3,12 @@ import logging
 import numpy as np
 from flask import Blueprint, jsonify, request
 
-from app.pot.detect import (
-    filter_by_areas,
-    filter_by_aspect_ratio,
-    filter_clipped_pots,
-)
-from app.pot.visualize import visualize_pipeline_tracking
+from app.pot.detect import filter_pot_masks
 from app.utils import (
-    apply_id_mapping,
-    associate_plants_to_pots,
     call_sam3_api,
     decode_image,
-    encode_image,
-    order_masks_row_major,
-    process_pot_stats,
-    refine_plant_masks,
-    refine_pot_masks_with_plants,
+    process_pipeline_outputs,
     unwrap_state,
-    wrap_state,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,8 +47,6 @@ def propagate():
 
         response = {}
         plant_masks = []
-        pot_masks = []
-
         sam3_pot_state, id_map = unwrap_state(pot_state)
 
         if pot_state:
@@ -71,115 +57,42 @@ def propagate():
                 score_threshold_detection=0.15,
             )
 
-            # Apply ID mapping
-            p_masks_raw = pot_result.get("masks", [])
+            # Filter recomputed masks
+            p_masks_raw = filter_pot_masks(pot_result.get("masks", []), image_np)
 
-            # --- FILTERING START ---
-            if p_masks_raw:
-                p_boxes = np.array([m["box"] for m in p_masks_raw])
-                p_confs = np.array([m["score"] for m in p_masks_raw])
-                p_widths = p_boxes[:, 2] - p_boxes[:, 0]
-                p_heights = p_boxes[:, 3] - p_boxes[:, 1]
-                p_areas = p_widths * p_heights
-
-                # Aspect ratio filter
-                ar_mask = filter_by_aspect_ratio(p_boxes, low=0.5, high=1.5)
-                # Clipped pot filter
-                edge_mask = filter_clipped_pots(
-                    p_boxes[ar_mask], p_areas[ar_mask], image_np.shape, margin=1
+            # --- PLANT DETECTION ---
+            plant_masks = []
+            plant_session_id = None
+            if plant_state:
+                # For the plant SAM3 request, we want to run mask reconditioning every frame
+                plant_result = call_sam3_api(
+                    image,
+                    endpoint="propagate",
+                    state=plant_state,
+                    recondition_on_trk_masks=True,
+                    recondition_every_nth_frame=1,
+                    score_threshold_detection=0.15,
+                    high_conf_thresh=0.15,
+                    high_iou_thresh=0.0001,
+                    new_det_thresh=0.7,
+                    det_nms_thresh=0.01,
+                    assoc_iou_thresh=0.0001,
+                    trk_assoc_iou_thresh=0.0001,
                 )
-                # Area filter
-                inlier_mask = filter_by_areas(
-                    p_boxes[ar_mask][edge_mask],
-                    p_areas[ar_mask][edge_mask],
-                    image_np,
-                    confidences=p_confs[ar_mask][edge_mask],
-                )
+                plant_masks = plant_result.get("masks", [])
+                plant_session_id = plant_result.get("session_id")
 
-                # Combine masks
-                final_keep = np.zeros(len(p_masks_raw), dtype=bool)
-                indices_ar = np.where(ar_mask)[0]
-                indices_edge = indices_ar[edge_mask]
-                final_keep[indices_edge[inlier_mask]] = True
-
-                # Filter p_masks_raw
-                p_masks_raw = [
-                    p_masks_raw[i] for i in range(len(p_masks_raw)) if final_keep[i]
-                ]
-
-            # --- FILTERING END ---
-
-            remapped_pot_masks, updated_id_map = apply_id_mapping(p_masks_raw, id_map)
-            pot_masks = remapped_pot_masks
-
-            response["pot_state"] = wrap_state(
-                pot_result.get("session_id"), updated_id_map
-            )
-
-        if plant_state:
-            # For the plant SAM3 request, we want to run mask reconditioning every frame
-            plant_result = call_sam3_api(
-                image,
-                endpoint="propagate",
-                state=plant_state,
-                recondition_on_trk_masks=True,
-                recondition_every_nth_frame=1,
-                score_threshold_detection=0.15,
-                high_conf_thresh=0.15,
-                high_iou_thresh=0.0001,
-                new_det_thresh=0.7,
-                det_nms_thresh=0.01,
-                assoc_iou_thresh=0.0001,
-                trk_assoc_iou_thresh=0.0001,
-            )
-            plant_masks = plant_result.get("masks", [])
-            response["debug_plant_mask_sam3_count"] = len(plant_masks)
-            response["plant_state"] = plant_result.get("session_id")
-
-        response["debug_pot_masks_count"] = len(pot_masks)
-
-        # Refine plant masks (if any) - requires pot_masks for quad-based expansion
-        if plant_masks and pot_masks:
-            plant_masks, _ = refine_plant_masks(image_np, plant_masks, pot_masks)
-
-        response["debug_refined_plant_masks_count"] = len(plant_masks)
-
-        # Associate and Refine Pot Masks
-        if plant_masks and pot_masks:
-            associations = associate_plants_to_pots(plant_masks, pot_masks)
-
-            # Refine pot masks by subtracting plant masks
-            refine_pot_masks_with_plants(
-                pot_masks,
-                plant_masks,
-                associations,
-                image_np.shape,
-            )
-
-            # Re-sort pots after refinement for stability
-            ordered_pot_masks = order_masks_row_major(pot_masks)
-            response["pot_masks"] = ordered_pot_masks
-            response["ordered_pot_ids"] = [m["object_id"] for m in ordered_pot_masks]
-            response["plant_masks"] = plant_masks
-
-            plant_stats = process_pot_stats(
+            # Process all outputs using the shared utility
+            response = process_pipeline_outputs(
                 image_np,
-                ordered_pot_masks,
                 plant_masks,
-                associations,
+                p_masks_raw,
+                id_map=id_map,
+                sam3_session_id=pot_result.get("session_id"),
             )
-
-            response["associations"] = associations
-            response["plant_stats"] = plant_stats
-            response["visualization_data"] = encode_image(
-                visualize_pipeline_tracking(
-                    image_np,
-                    plant_masks,
-                    ordered_pot_masks,
-                    associations,
-                    plant_stats=plant_stats,
-                )
-            )
+            response["plant_state"] = plant_session_id
+            response["debug_plant_mask_sam3_count"] = len(plant_masks)
+            response["debug_pot_masks_count"] = len(p_masks_raw)
 
         return jsonify(response)
     except Exception as e:
