@@ -101,33 +101,6 @@ def filter_by_areas(
     return inlier_mask
 
 
-def filter_by_confidence(confidences):
-    gap = 0.08
-    # Filter by confidence - find first gap >= 0.05 between sorted confidences
-    conf_mask = np.ones(len(confidences), dtype=bool)  # Initialize to keep all
-
-    if len(confidences) >= 2:
-        sorted_confidences = np.sort(confidences)
-        # Calculate gaps between consecutive sorted confidences
-        gaps = np.diff(sorted_confidences)
-
-        # Find the first gap >= gap
-        gap_indices = np.where(gaps >= gap)[0]
-
-        if len(gap_indices) > 0:
-            # Set threshold to the confidence value after the first large gap
-            first_gap_idx = gap_indices[0]
-            threshold = sorted_confidences[first_gap_idx + 1]
-            conf_mask = (confidences >= threshold).astype(bool)
-
-    if not conf_mask.any():
-        # Fallback: keep highest confidence box
-        best_idx = int(np.argmax(confidences))
-        conf_mask = np.zeros_like(conf_mask, dtype=bool)
-        conf_mask[best_idx] = True
-    return conf_mask
-
-
 def apply_nms(boxes, confidences, iou_threshold=0.55):
     """
     Apply Non-Maximum Suppression (NMS) to filter overlapping boxes.

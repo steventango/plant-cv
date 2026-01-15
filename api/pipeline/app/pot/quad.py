@@ -51,23 +51,3 @@ def mask_to_quadrilateral(mask: np.ndarray) -> np.ndarray:
 
     # Order corners as TL, TR, BR, BL
     return order_quad(quad)
-
-
-def compute_quadrilaterals(masks: np.ndarray) -> np.ndarray:
-    """
-    Compute quadrilaterals for multiple masks.
-
-    Args:
-        masks: Numpy array of masks (M, H, W)
-
-    Returns:
-        Numpy array of quadrilaterals, each (M, 4, 2) float32
-    """
-    quads = np.zeros((masks.shape[0], 4, 2), dtype=np.float32)
-    for i in range(masks.shape[0]):
-        try:
-            quad = mask_to_quadrilateral(masks[i])
-            quads[i] = quad
-        except Exception as e:
-            print(f"Failed to compute quadrilateral for mask {i}: {e}")
-    return quads
