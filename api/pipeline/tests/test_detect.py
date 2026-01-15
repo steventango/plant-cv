@@ -22,12 +22,12 @@ def reference_images():
         return []
 
     all_images = sorted(list(REFERENCE_IMAGES_DIR.glob("*.jpg")))
-    problem_images = [
-        "E11Z09_2025-08-20T153000+0000_left.jpg",
-        "E12Z06_2025-09-17T153000+0000_left.jpg",
-        "E13Z01_2025-10-08T153000+0000_left.jpg",
-    ]
-    return [img for img in all_images if img.name in problem_images]
+    problem_images = []
+    if problem_images:
+        images = [img for img in all_images if img.name not in problem_images]
+    else:
+        images = all_images
+    return images
 
 
 # Specific overrides for images where pots might be out of frame
@@ -35,10 +35,7 @@ SPECIFIC_POT_COUNTS = {
     "E14Z05_2025-11-12T163000+0000_left.jpg": 60,
     "E14Z08_2025-11-12T163000+0000_left.jpg": 59,
 }
-SPECIFIC_PLANT_COUNTS = {
-    "E14Z05_2025-11-12T163000+0000_left.jpg": 60,
-    "E14Z08_2025-11-12T163000+0000_left.jpg": 59,
-}
+SPECIFIC_PLANT_COUNTS = SPECIFIC_POT_COUNTS | {}
 
 
 def get_expected_count(filename, override):
@@ -67,7 +64,7 @@ def check_image(image_path):
     expected_plant_count = get_expected_count(image_path.name, SPECIFIC_PLANT_COUNTS)
 
     if expected_pot_count is None:
-        return None
+        return None, None, None
 
     pot_count = 0
     plant_count = 0
@@ -94,7 +91,7 @@ def check_image(image_path):
             pass
 
         if resp.status_code != 200:
-            return f"Error for {image_path.name}: {resp.text}", None
+            return f"Error for {image_path.name}: {resp.text}", None, None
         resp.raise_for_status()
         detect_result = resp.json()
 
