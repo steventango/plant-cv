@@ -231,13 +231,15 @@ def filter_clipped_pots(boxes, areas, image_shape, margin=1, area_threshold=0.7)
     return keep_mask
 
 
-def detect_pots_sam3(image, state=None):
+def detect_pots_sam3(image, state=None, extra_prompts=None, **kwargs):
     """
     Detect pots in an image using SAM3 and filter outliers.
 
     Args:
         image: PIL Image or numpy array
         state: Previous pot tracking state (for propagate mode)
+        extra_prompts: Optional list of additional text prompts to detect simultaneously
+        **kwargs: Additional parameters for SAM3 (e.g., threshold, recondition_every_nth_frame)
 
 
     Returns:
@@ -246,6 +248,7 @@ def detect_pots_sam3(image, state=None):
         class_names: Filtered class names
         state: Updated pot tracking state
         masks: Filtered list of mask dictionaries
+        raw_result: The full result from SAM3 API (useful for extra_prompts)
     """
 
     if isinstance(image, np.ndarray):
@@ -254,25 +257,40 @@ def detect_pots_sam3(image, state=None):
     else:
         image_np = np.array(image)
 
+    # Default threshold for pots if not provided
+    if "score_threshold_detection" not in kwargs:
+        kwargs["score_threshold_detection"] = 0.3
+
     # Determine endpoint based on whether we have previous state
     if state is None:
         endpoint = "detect"
-        result = call_sam3_api(
-            image, endpoint=endpoint, text_prompt="plant pot", threshold=0.3
-        )
+        prompts = ["plant pot"]
+        if extra_prompts:
+            if isinstance(extra_prompts, list):
+                prompts.extend(extra_prompts)
+            else:
+                prompts.append(extra_prompts)
+
+        result = call_sam3_api(image, endpoint=endpoint, text_prompt=prompts, **kwargs)
     else:
         endpoint = "propagate"
-        result = call_sam3_api(image, endpoint=endpoint, state=state, threshold=0.3)
+        result = call_sam3_api(image, endpoint=endpoint, state=state, **kwargs)
 
     # Extract masks from result
-    masks = result.get("masks", [])
+    # If multiple prompts were used, masks are grouped by prompt
+    prompt_masks = result.get("prompt_masks", {})
+    if prompt_masks:
+        # Use "plant pot" masks if available, otherwise fallback to all masks
+        masks = prompt_masks.get("plant pot", result.get("masks", []))
+    else:
+        masks = result.get("masks", [])
 
     if len(masks) == 0:
         return (
             np.array([]),
             np.array([]),
             np.array([]),
-            result.get("state"),
+            result.get("session_id"),
             [],
         )
 
@@ -288,7 +306,7 @@ def detect_pots_sam3(image, state=None):
             boxes,
             confidences,
             class_names,
-            result.get("state"),
+            result.get("session_id"),
             [],
         )
 
@@ -320,7 +338,7 @@ def detect_pots_sam3(image, state=None):
             boxes,
             confidences,
             class_names,
-            result.get("state"),
+            result.get("session_id"),
             [],
         )
 
@@ -339,7 +357,7 @@ def detect_pots_sam3(image, state=None):
             boxes,
             confidences,
             class_names,
-            result.get("state"),
+            result.get("session_id"),
             [],
         )
 
@@ -362,6 +380,7 @@ def detect_pots_sam3(image, state=None):
         boxes,
         confidences,
         class_names,
-        result.get("state"),
+        result.get("session_id"),
         masks_np.tolist(),
+        result,
     )

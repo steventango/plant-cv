@@ -115,9 +115,14 @@ def visualize_pipeline_tracking(
         pot_quads = []
 
         for pot in pot_masks_info:
-            if "contour" in pot:
+            if "contour" in pot and pot["contour"]:
+                contour_array = np.array(pot["contour"], dtype=np.int32)
+                # Skip if contour is empty or has too few points
+                if contour_array.size == 0 or len(contour_array) < 3:
+                    continue
+
                 mask = np.zeros((h, w), dtype=np.uint8)
-                cv2.fillPoly(mask, [np.array(pot["contour"], dtype=np.int32)], 1)
+                cv2.fillPoly(mask, [contour_array], 1)
                 try:
                     quad = mask_to_quadrilateral(mask)  # (4, 2)
                     pot_quads.append(quad)

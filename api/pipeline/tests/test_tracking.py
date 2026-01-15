@@ -4,10 +4,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 import requests
+from tqdm import tqdm
 
 # Path to test tracking frames (relative to this file)
 TRACKING_FRAMES_DIR = Path(__file__).parent / "test_data" / "tracking_frames"
-TEST_OUTPUT_DIR = Path(__file__).parent / "test_output"
+TEST_OUTPUT_DIR = Path(__file__).parent / "test_output" / "tracking"
 
 
 # Pipeline service endpoints
@@ -88,7 +89,7 @@ class TestPipelineTracking:
         pot_state = None
         plant_state = None
 
-        for j, (frame_path, timestamp) in enumerate(video_frames):
+        for j, (frame_path, timestamp) in enumerate(tqdm(video_frames)):
             image_data = encode_image_from_path(frame_path)
 
             if pot_state is None:
@@ -111,8 +112,20 @@ class TestPipelineTracking:
             plant_state = result.get("plant_state")
             associations = result.get("associations", {})
             ordered_pot_ids = result.get("ordered_pot_ids", [])
+            ordered_pot_ids_str = [str(x) for x in ordered_pot_ids]
             pot_masks = result.get("pot_masks", [])
             plant_stats = result.get("plant_stats", {})
+
+            # DEBUG:
+            print(
+                f"Plant mask count from SAM3 for frame {j}: {result.get('debug_plant_mask_sam3_count', 0)}"
+            )
+            print(
+                f"Refined plant mask count for frame {j}: {result.get('debug_refined_plant_masks_count', 0)}"
+            )
+            print(
+                f"Pot mask count for frame {j}: {result.get('debug_pot_masks_count', 0)}"
+            )
 
             # Verify stats: should be present and for 64 pots
             assert plant_stats is not None, f"Frame {j}: plant_stats missing"
@@ -121,29 +134,72 @@ class TestPipelineTracking:
             )
 
             # Print example stat and save warped image if available
-            if plant_stats:
+            if plant_stats and ordered_pot_ids:
                 first_pot_id = str(ordered_pot_ids[0])
-                if first_pot_id in plant_stats and plant_stats[first_pot_id]:
+                if first_pot_id in plant_stats:
                     stats = plant_stats[first_pot_id]
-                    area = stats.get("area", "N/A")
-                    print(f"Sample stats for pot {first_pot_id}: area={area:.2f} mm²")
+                    if stats:
+                        area = stats.get("area", 0)
+                        print(
+                            f"Sample stats for pot {first_pot_id}: area={area:.2f} mm²"
+                        )
 
-                    # Save warped image
-                    w_b64 = stats.get("warped_image")
-                    if w_b64:
-                        import base64 as b64
+                        # Save warped image
+                        w_b64 = stats.get("warped_image")
+                        if w_b64:
+                            import base64 as b64
 
-                        warped_dir = Path("tests/test_output/warped_pots")
-                        warped_dir.mkdir(parents=True, exist_ok=True)
-                        img_data = b64.b64decode(w_b64)
-                        with open(
-                            warped_dir / f"frame_{j}_pot_{first_pot_id}.jpg", "wb"
-                        ) as f:
-                            f.write(img_data)
+                            warped_dir = TEST_OUTPUT_DIR / "warped_pots"
+                            warped_dir.mkdir(parents=True, exist_ok=True)
+                            img_data = b64.b64decode(w_b64)
+                            with open(
+                                warped_dir / f"frame_{j}_pot_{first_pot_id}.jpg", "wb"
+                            ) as f:
+                                f.write(img_data)
+
+                # Create reverse mapping: pot_id -> plant_id
+                pot_to_plant = {str(v): k for k, v in associations.items()}
+
+                # Monitor specific pots requested by user
+                monitored_pots = ["29", "38"]
+                for p_id in monitored_pots:
+                    if p_id in pot_to_plant:
+                        plant_id = pot_to_plant[p_id]
+                        if p_id in plant_stats:
+                            p_area = plant_stats[p_id].get("area", 0)
+                            print(
+                                f"DEBUG: Pot {p_id} (Plant {plant_id}) area: {p_area:.0f} mm²"
+                            )
+                        else:
+                            print(f"DEBUG: Pot {p_id} (Plant {plant_id}) has no stats")
+                    elif (
+                        str(p_id) in ordered_pot_ids_str
+                    ):  # Check if pot exists but has no plant
+                        print(f"DEBUG: Pot {p_id} exists but has NO associated plant")
+                    else:
+                        print(f"DEBUG: Pot {p_id} is LOST/MISSING from ordered_pot_ids")
+
+                # Check for lost plants 34 and 41 explicitly
+                lost_plants = [34, 41]
+                found_plants = [p["object_id"] for p in result.get("plant_masks", [])]
+                for lp in lost_plants:
+                    if lp in found_plants:
+                        # Find its mask and center
+                        pm = next(
+                            p for p in result["plant_masks"] if p["object_id"] == lp
+                        )
+                        box = pm["box"]
+                        cx = (box[0] + box[2]) / 2
+                        cy = (box[1] + box[3]) / 2
+                        print(
+                            f"DEBUG: Plant {lp} FOUND in plant_masks. Center: ({cx:.1f}, {cy:.1f})"
+                        )
+                    else:
+                        print(f"DEBUG: Plant {lp} NOT FOUND in plant_masks")
 
             # Verify ordering: pot_masks should match ordered_pot_ids and be row-major
             print(
-                f"DEBUG: frame {j}, pot_masks len={len(pot_masks)}, ordered_pot_ids len={len(ordered_pot_ids)}"
+                f"DEBUG: frame {j}, pot_masks len={len(pot_masks)}, ordered_pot_ids len={len(ordered_pot_ids)}, plant_stats len={len(plant_stats)}"
             )
             assert len(pot_masks) == len(ordered_pot_ids)
             if len(pot_masks) > 1:

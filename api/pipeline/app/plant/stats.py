@@ -72,7 +72,7 @@ def analyze_plant_mask(
         f"DEBUG: Analyze plant mask: scale={scale:.4f}, plant_pixels={n_pixels}",
         flush=True,
     )
-    logger.error(f"Analyze plant mask: scale={scale:.4f}, plant_pixels={n_pixels}")
+    logger.debug(f"Analyze plant mask: scale={scale:.4f}, plant_pixels={n_pixels}")
 
     # Set PlantCV parameters
     pcv.params.line_thickness = 2

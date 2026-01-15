@@ -33,7 +33,7 @@ def mask_to_quadrilateral(mask: np.ndarray) -> np.ndarray:
         raise ValueError("mask_to_quadrilateral received an empty mask")
 
     # Remove small protrusions using morphological opening
-    kernel = np.ones((5, 5), np.uint8)
+    kernel = np.ones((25, 25), np.uint8)
     mask_u8 = cv2.morphologyEx(mask_u8, cv2.MORPH_OPEN, kernel)
 
     # Find largest contour

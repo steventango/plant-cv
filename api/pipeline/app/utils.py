@@ -37,8 +37,8 @@ def call_sam3_api(
     endpoint: str = "detect",
     text_prompt: str | None = None,
     state: str | None = None,
-    threshold: float | None = None,
     server_url: str = "http://sam3:8805/predict",
+    **kwargs,
 ):
     """
     Call SAM3 API for detection and tracking.
@@ -49,6 +49,7 @@ def call_sam3_api(
         text_prompt: Text prompt for detection (required for detect)
         state: State from previous call (required for propagate)
         server_url: URL of the SAM3 API server
+        **kwargs: Additional parameters for SAM3 (e.g., threshold, recondition_every_nth_frame)
 
     Returns:
         dict with keys:
@@ -60,15 +61,25 @@ def call_sam3_api(
         "image_data": encode_image(image),
     }
 
-    if threshold is not None:
-        payload["threshold"] = threshold
+    if "new_det_thresh" not in kwargs:
+        kwargs["new_det_thresh"] = 0.5
+    if "high_conf_thresh" not in kwargs:
+        kwargs["high_conf_thresh"] = 0.4
+    if "high_iou_thresh" not in kwargs:
+        kwargs["high_iou_thresh"] = 0.4
+    if "recondition_on_trk_masks" not in kwargs:
+        kwargs["recondition_on_trk_masks"] = True
+    if "recondition_every_nth_frame" not in kwargs:
+        kwargs["recondition_every_nth_frame"] = 10000
+    if "max_num_objects" not in kwargs:
+        kwargs["max_num_objects"] = 100
 
     if endpoint == "detect":
         if text_prompt:
             payload["text_prompt"] = text_prompt
     elif endpoint == "propagate":
         if state:
-            payload["state"] = state
+            payload["session_id"] = state
 
     response = requests.post(server_url, json=payload, timeout=120)
     response.raise_for_status()
@@ -94,7 +105,7 @@ def order_masks_row_major(masks):
 
 def associate_plants_to_pots(plant_masks, pot_masks):
     """
-    Associate each plant with a pot ID.
+    Associate each plant with a pot ID based on maximum bounding box overlap.
     Returns a mapping of plant_object_id -> pot_object_id.
     """
     associations = {}
@@ -103,16 +114,25 @@ def associate_plants_to_pots(plant_masks, pot_masks):
 
     for plant in plant_masks:
         p_box = plant["box"]
-        p_center = ((p_box[0] + p_box[2]) / 2, (p_box[1] + p_box[3]) / 2)
+        # p_box is [x1, y1, x2, y2]
 
         best_pot_id = None
-        # Could use IoU, but center-in-box is usually sufficient for plant-in-pot matching
+        max_overlap_area = 0.0
+
         for pot in pot_masks:
             b = pot["box"]
-            # Check if plant center is inside pot box
-            if b[0] <= p_center[0] <= b[2] and b[1] <= p_center[1] <= b[3]:
-                best_pot_id = pot["object_id"]
-                break
+
+            # Calculate intersection box
+            ix1 = max(p_box[0], b[0])
+            iy1 = max(p_box[1], b[1])
+            ix2 = min(p_box[2], b[2])
+            iy2 = min(p_box[3], b[3])
+
+            if ix2 > ix1 and iy2 > iy1:
+                intersection_area = (ix2 - ix1) * (iy2 - iy1)
+                if intersection_area > max_overlap_area:
+                    max_overlap_area = intersection_area
+                    best_pot_id = pot["object_id"]
 
         if best_pot_id is not None:
             associations[str(plant["object_id"])] = best_pot_id
@@ -247,8 +267,13 @@ def process_pot_stats(image_np, pot_masks, plant_masks, associations):
 
 def refine_pot_masks_with_plants(pot_masks, plant_masks, associations, image_shape):
     """
-    Refine pot masks by subtracting associated plant masks.
-    This prevents plant leaves from being treated as part of the pot.
+    Refine pot masks by subtracting associated plant masks and applying morphological cleanup.
+
+    This handles plants that outgrow the true pot boundaries by:
+    1. Subtracting the plant mask from the pot mask
+    2. Applying morphological closing (to fill small holes)
+    3. Applying morphological opening (to remove noise/artifacts)
+    4. Using convex hull for a clean pot shape
     """
     h, w = image_shape[:2]
     plant_map = {str(p["object_id"]): p for p in plant_masks}
@@ -257,6 +282,10 @@ def refine_pot_masks_with_plants(pot_masks, plant_masks, associations, image_sha
     pot_to_plant = {}
     for p_id_str, pot_id in associations.items():
         pot_to_plant[pot_id] = p_id_str
+
+    # Morphological kernels
+    close_kernel = np.ones((15, 15), np.uint8)  # Closing to fill small holes
+    open_kernel = np.ones((7, 7), np.uint8)  # Opening to remove noise
 
     for pot in pot_masks:
         pot_id = pot["object_id"]
@@ -291,8 +320,14 @@ def refine_pot_masks_with_plants(pot_masks, plant_masks, associations, image_sha
             if poly.ndim == 2 and poly.shape[0] > 0:
                 cv2.fillPoly(plant_mask, [poly], 255)
 
-        # Subtract plant from pot
+        # Step 1: Subtract plant from pot
         refined_mask = cv2.bitwise_and(pot_mask, cv2.bitwise_not(plant_mask))
+
+        # Step 2: Apply morphological closing to fill small holes created by subtraction
+        refined_mask = cv2.morphologyEx(refined_mask, cv2.MORPH_CLOSE, close_kernel)
+
+        # Step 3: Apply morphological opening to remove noise/artifacts
+        refined_mask = cv2.morphologyEx(refined_mask, cv2.MORPH_OPEN, open_kernel)
 
         # Determine new largest contour for pot
         if np.sum(refined_mask) > 0:
@@ -303,16 +338,17 @@ def refine_pot_masks_with_plants(pot_masks, plant_masks, associations, image_sha
                 largest = max(contours, key=cv2.contourArea)
 
                 # Check if the refined area is too small compared to original (excessive subtraction)
-                if cv2.contourArea(largest) < 0.3 * cv2.contourArea(
+                original_area = cv2.contourArea(
                     np.array(pot["contour"], dtype=np.int32)
-                ):
+                )
+                if original_area > 0 and cv2.contourArea(largest) < 0.1 * original_area:
                     continue
 
-                # Use convex hull to maintain pot-like shape and avoid artifacts (triangles/slivers)
+                # Use convex hull to maintain pot-like shape and avoid artifacts
                 hull = cv2.convexHull(largest)
 
-                # Update pot info if hull is valid
-                if len(hull) >= 3:
+                # Update pot info if hull is valid and has enough points/area
+                if len(hull) >= 4 and cv2.contourArea(hull) > 100:
                     pot["contour"] = hull.reshape(-1, 2).tolist()
                     x, y, wb, hb = cv2.boundingRect(hull)
                     pot["box"] = [float(x), float(y), float(x + wb), float(y + hb)]

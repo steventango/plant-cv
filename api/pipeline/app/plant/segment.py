@@ -3,16 +3,23 @@ import logging
 import cv2
 import numpy as np
 from plantcv import plantcv as pcv
-from skimage.exposure import equalize_adapthist
 from skimage.filters import threshold_otsu
 
 logger = logging.getLogger(__name__)
 
 
+def preprocess_for_otsu(image_rgb: np.ndarray) -> np.ndarray:
+    """
+    Pre-process image for Otsu refinement: Grayscale + fast OpenCV CLAHE.
+    """
+    gray_image = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    return clahe.apply(gray_image)
+
+
 def refine_mask_with_otsu(
-    image_rgb: np.ndarray,
     mask: np.ndarray,
-    pot_width_px: int = None,
+    preprocessed_gray: np.ndarray,
 ) -> np.ndarray:
     """
     Refine a binary mask using Otsu thresholding on the equalized grayscale image.
@@ -30,44 +37,27 @@ def refine_mask_with_otsu(
     if not np.any(mask):
         return mask
 
-    # Convert to grayscale
-    gray_image = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
-
-    # Determine kernel size for adaptive equalization
-    if pot_width_px is None:
-        pot_width_px = max(int(image_rgb.shape[1] / 5), 1)
-
-    # Equalize histogram
-    # Note: equalize_adapthist expects float [0, 1] or uint8, returns float [0, 1]
-    equalized = equalize_adapthist(
-        gray_image, kernel_size=pot_width_px, clip_limit=0.01
-    )
-    equalized_uint8 = (equalized * 255).astype(np.uint8)
-
     # Calculate Otsu threshold only on pixels within the initial mask
-    masked_pixels = equalized_uint8[mask > 0]
+    masked_pixels = preprocessed_gray[mask > 0]
     if masked_pixels.size == 0:
         return mask
 
-    # Reshape for threshold_otsu
     try:
-        otsu_thresh = threshold_otsu(masked_pixels.reshape((1, -1)))
+        # threshold_otsu expects 1D array
+        otsu_thresh = threshold_otsu(masked_pixels)
     except ValueError:
-        # If all pixels have same intensity, Otsu fails
         return mask
 
-    # Create binary mask from threshold
-    refined_mask_pcv = pcv.threshold.binary(
-        equalized_uint8, threshold=otsu_thresh, object_type="light"
-    )
 
-    # PlantCV returns 0/255 image, convert to boolean
-    refined_mask_bool = refined_mask_pcv > 0
+    # dilate mask
+    kernel = np.ones((3, 3), np.uint8)
+    dilated_mask = cv2.dilate(mask, kernel, iterations=1)
 
-    # Intersect with original mask
-    final_mask = mask & refined_mask_bool
+    # Create binary mask from threshold and intersect with original mask
+    # Assuming object_type="light" (plant is usually lighter than the pot/background in CLAHE)
+    refined_mask_bool = (preprocessed_gray > otsu_thresh) & (dilated_mask > 0)
 
-    return final_mask.astype(np.uint8) * 255
+    return refined_mask_bool.astype(np.uint8) * 255
 
 
 def filter_masks_by_area(
@@ -172,7 +162,6 @@ def select_best_mask(
         -((center_x - box_centers_x) ** 2 + (center_y - box_centers_y) ** 2)
         / (sigma / 2) ** 2
     )
-    logger.info(f"Center score: {center_score}")
 
     mask_areas = np.array([np.sum(mask > 0) for mask in masks], dtype=float)
     box_widths = valid_boxes[:, 2] - valid_boxes[:, 0]
@@ -184,10 +173,8 @@ def select_best_mask(
     # Penalize high area ratios
     area_ratio_score = 1 - np.clip(area_ratio_score, 0.0, 1.0)
     area_ratio_score[area_ratio_score > 0.4] = 1
-    logger.info(f"Area ratio score: {area_ratio_score}")
 
     combined_scores = valid_confidences * center_score * area_ratio_score
-    logger.info(f"Combined scores: {combined_scores}")
     combined_scores = np.exp(combined_scores) / np.sum(np.exp(combined_scores))
 
     best_relative_idx = int(np.argmax(combined_scores))
