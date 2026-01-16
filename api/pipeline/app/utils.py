@@ -1,9 +1,11 @@
+import asyncio
 import base64
 import io
 import json
 import logging
 
 import cv2
+import httpx
 import numpy as np
 import requests
 from PIL import Image
@@ -86,11 +88,53 @@ def call_sam3_api(
             payload["session_id"] = state
 
     session = requests.Session()
-    retries = Retry(total=kwargs.pop("max_retries", 5), backoff_factor=kwargs.pop("backoff_factor", 1.0), status_forcelist=[502, 503, 504])
+    retries = Retry(
+        total=kwargs.pop("max_retries", 5),
+        backoff_factor=kwargs.pop("backoff_factor", 1.0),
+        status_forcelist=[502, 503, 504],
+    )
     session.mount("http://", HTTPAdapter(max_retries=retries))
     response = session.post(server_url, json=payload, timeout=120)
     response.raise_for_status()
     return response.json()
+
+
+async def async_get_embeddings(
+    warped_images_b64: list[str],
+    server_url: str = "http://embeddings:8803/predict",
+    timeout: int = 60,
+) -> list[dict]:
+    """
+    Call Embeddings API asynchronously for a list of images.
+    """
+    if not warped_images_b64:
+        return []
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        tasks = []
+        for img_b64 in warped_images_b64:
+            payload = {
+                "image_data": img_b64,
+                "embedding_types": ["cls_token"],
+            }
+            tasks.append(client.post(server_url, json=payload))
+
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+
+        results = []
+        for i, resp in enumerate(responses):
+            if isinstance(resp, Exception):
+                logger.error(f"Error calling embeddings API for image {i}: {resp}")
+                results.append({"error": str(resp)})
+            elif resp.status_code != 200:
+                logger.error(
+                    f"Embeddings API returned status {resp.status_code} for image {i}: {resp.text}"
+                )
+                results.append({"error": f"Status {resp.status_code}"})
+            else:
+                results.append(resp.json())
+
+        return results
 
 
 def order_masks_row_major(masks):
@@ -325,13 +369,12 @@ def process_pot_stats(image_np, pot_masks, plant_masks, associations):
     h, w = image_np.shape[:2]
     stats_dict = {}
 
-    # Compute quads for all pots
-    # We can use mask_to_quadrilateral for each pot mask
+    # Collect all metadata for processing
+    processing_tasks = []
+
     for pot in pot_masks:
         pot_id = pot["object_id"]
         plant_id = None
-        # Find which plant (if any) is in this pot
-        # The associations dict has plant_id -> pot_id
         for p_id_str, pt_id in associations.items():
             if pt_id == pot_id:
                 plant_id = int(p_id_str)
@@ -341,25 +384,34 @@ def process_pot_stats(image_np, pot_masks, plant_masks, associations):
             stats_dict[str(pot_id)] = None
             continue
 
-        # Get the plant mask info
         plant_info = next((p for p in plant_masks if p["object_id"] == plant_id), None)
         if not plant_info:
             stats_dict[str(pot_id)] = None
             continue
 
+        processing_tasks.append(
+            {"pot_id": pot_id, "pot": pot, "plant_info": plant_info}
+        )
+
+    # 1. Generate warped images (synchronously for now as CV2 is fast)
+    warped_images_info = []
+    for task in processing_tasks:
         try:
-            # 1. Get Pot Quad
+            pot_id = task["pot_id"]
+            pot = task["pot"]
+            plant_info = task["plant_info"]
+
+            # Pot Quad
             pot_contour = np.array(pot["contour"], dtype=np.int32)
             pot_mask_single = np.zeros((h, w), dtype=np.uint8)
             cv2.fillPoly(pot_mask_single, [pot_contour], 1)
             quad = mask_to_quadrilateral(pot_mask_single)
 
-            # 2. Warp Pot Image
-            output_size = 224  # Target 224x224 as per feedback
+            # Warp Pot Image
+            output_size = 224
             warped_pot, H = warp_quad_to_square(image_np, quad, output_size=output_size)
 
-            # 3. Get Plant Mask and Warp it
-            # Use all refined contours if available
+            # Warp Plant Mask
             p_contours = plant_info.get("contours")
             if p_contours:
                 plant_mask_single = np.zeros((h, w), dtype=np.uint8)
@@ -377,25 +429,48 @@ def process_pot_stats(image_np, pot_masks, plant_masks, associations):
                 flags=cv2.INTER_NEAREST,
             )
 
-            # 4. Analyze
-            plant_stats, _ = analyze_plant_mask(warped_pot, warped_plant_mask)
-
-            # Include base64 warped image in stats
-            import io
-
-            from PIL import Image
-
+            # Encode to B64
             pill_warped = Image.fromarray(warped_pot)
             buffered = io.BytesIO()
             pill_warped.save(buffered, format="JPEG")
             warped_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-            plant_stats["warped_image"] = warped_b64
-            stats_dict[str(pot_id)] = plant_stats
-
+            warped_images_info.append(
+                {
+                    "pot_id": pot_id,
+                    "warped_pot": warped_pot,
+                    "warped_plant_mask": warped_plant_mask,
+                    "warped_b64": warped_b64,
+                }
+            )
         except Exception as e:
-            logger.error(f"Error processing stats for pot {pot_id}: {e}")
-            stats_dict[str(pot_id)] = {"error": str(e)}
+            logger.error(f"Error preparing warp for pot {task['pot_id']}: {e}")
+            stats_dict[str(task["pot_id"])] = {"error": str(e)}
+
+    # 2. Get embeddings asynchronously
+    if warped_images_info:
+        warped_b64_list = [info["warped_b64"] for info in warped_images_info]
+        embeddings_results = asyncio.run(async_get_embeddings(warped_b64_list))
+
+        for info, emb_res in zip(warped_images_info, embeddings_results):
+            pot_id = info["pot_id"]
+            try:
+                # 3. Analyze Plant Stats
+                plant_stats, _ = analyze_plant_mask(
+                    info["warped_pot"], info["warped_plant_mask"]
+                )
+                plant_stats["warped_image"] = info["warped_b64"]
+
+                # 4. Integrate Embeddings
+                if "cls_token" in emb_res:
+                    plant_stats["embeddings"] = emb_res["cls_token"]
+                elif "error" in emb_res:
+                    plant_stats["embeddings_error"] = emb_res["error"]
+
+                stats_dict[str(pot_id)] = plant_stats
+            except Exception as e:
+                logger.error(f"Error finalising stats for pot {pot_id}: {e}")
+                stats_dict[str(pot_id)] = {"error": str(e)}
 
     return stats_dict
 

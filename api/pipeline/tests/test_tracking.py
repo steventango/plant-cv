@@ -144,6 +144,15 @@ class TestPipelineTracking:
                             f"Sample stats for pot {first_pot_id}: area={area:.2f} mm²"
                         )
 
+                        # Verify embeddings
+                        embeddings = stats.get("embeddings")
+                        assert embeddings is not None, (
+                            f"Frame {j}: embeddings missing for pot {first_pot_id}"
+                        )
+                        assert len(embeddings) == 768, (
+                            f"Frame {j}: embedding length mismatch for pot {first_pot_id}: {len(embeddings)}"
+                        )
+
                         # Save warped image
                         w_b64 = stats.get("warped_image")
                         if w_b64:
