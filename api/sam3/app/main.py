@@ -1,10 +1,6 @@
-import base64
 import gc
-import io
 import time
 import uuid
-import zlib
-from collections import OrderedDict
 from contextlib import nullcontext
 
 import cv2
@@ -17,113 +13,8 @@ from transformers import (
     Sam3VideoModel,
     Sam3VideoProcessor,
 )
-from utils import _move_to_device, decode_image, mask_to_contour
-
-
-def prune_session(session: Sam3VideoInferenceSession, keep_frames: int = 2):
-    """
-    Prune session state to keep it small, only keeping the most recent frames and features.
-    """
-    if not hasattr(session, "processed_frames"):
-        return
-
-    all_frame_indices = sorted(session.processed_frames.keys())
-    if len(all_frame_indices) <= keep_frames:
-        return
-
-    # Indices to remove
-    to_remove = all_frame_indices[:-keep_frames]
-
-    # Prune processed_frames
-    for idx in to_remove:
-        if idx in session.processed_frames:
-            del session.processed_frames[idx]
-
-    # Prune cache features
-    if hasattr(session, "cache") and hasattr(session.cache, "_vision_features"):
-        for idx in to_remove:
-            if idx in session.cache._vision_features:
-                del session.cache._vision_features[idx]
-
-    # Prune output_buffer and other temporary state
-    if hasattr(session, "output_buffer"):
-        session.output_buffer = []
-
-
-def serialize_state(inference_session: Sam3VideoInferenceSession) -> str:
-    """Serialize the entire inference session object to compressed base64 string."""
-    t0 = time.time()
-    prune_session(inference_session)
-    t_prune = time.time() - t0
-
-    buffer = io.BytesIO()
-    torch.save(inference_session, buffer)
-    t_save = time.time() - t0 - t_prune
-
-    raw_bytes = buffer.getvalue()
-    raw_size = len(raw_bytes)
-
-    compressed = zlib.compress(raw_bytes)
-    t_compress = time.time() - t0 - t_prune - t_save
-    comp_size = len(compressed)
-
-    b64_str = base64.b64encode(compressed).decode("utf-8")
-    t_b64 = time.time() - t0 - t_prune - t_save - t_compress
-
-    print(
-        f"DEBUG: serialize raw={raw_size / 1e6:.2f}MB, comp={comp_size / 1e6:.2f}MB, timings: prune:{t_prune:.3f}s, save:{t_save:.3f}s, compress:{t_compress:.3f}s, b64:{t_b64:.3f}s",
-        flush=True,
-    )
-    return b64_str
-
-
-def deserialize_state(state_str: str, device: str) -> Sam3VideoInferenceSession:
-    """Deserialize compressed state and restore the inference session object."""
-    compressed_bytes = base64.b64decode(state_str)
-    state_bytes = zlib.decompress(compressed_bytes)
-
-    buffer = io.BytesIO(state_bytes)
-    # Load to CPU first to avoid intermediate OOM
-    session = torch.load(buffer, map_location="cpu", weights_only=False)
-
-    # Update inference device
-    session.inference_device = str(device)
-
-    # Move attributes to device, excluding large offloaded data
-    for k, v in session.__dict__.items():
-        if k in ["processed_frames", "video_data"]:
-            continue
-        session.__dict__[k] = _move_to_device(v, device)
-
-    if hasattr(session, "cache"):
-        session.cache = _move_to_device(session.cache, device)
-
-    return session
-
-
-class SessionCache:
-    """In-memory cache for SAM3 inference sessions."""
-
-    def __init__(self, max_size: int):
-        self.cache = OrderedDict()
-        self.max_size = max_size
-
-    def get(self, session_id: str) -> Sam3VideoInferenceSession:
-        if session_id in self.cache:
-            self.cache.move_to_end(session_id)
-            return self.cache[session_id]
-        # TODO: load from checkpoint
-        return None
-
-    def set(self, session_id: str, session: Sam3VideoInferenceSession):
-        if session_id in self.cache:
-            self.cache.move_to_end(session_id)
-        self.cache[session_id] = session
-        # TODO: save checkpoint
-        if len(self.cache) > self.max_size:
-            self.cache.popitem(last=False)
-            gc.collect()
-            torch.cuda.empty_cache()
+from utils import decode_image, mask_to_contour
+from caching import SessionCache, PersistenceManager, prune_session
 
 
 def process_outputs(
@@ -224,7 +115,10 @@ class SAM3API(ls.LitAPI):
         self.inference_height = 1008
 
         # Initialize session cache
-        self.session_cache = SessionCache(max_size=24)
+        self.persistence = PersistenceManager(persistence_dir="checkpoints")
+        self.session_cache = SessionCache(
+            max_size=24, persistence_manager=self.persistence, device=device
+        )
 
     def decode_request(self, request: dict):
         return request
