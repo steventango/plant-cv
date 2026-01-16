@@ -463,9 +463,9 @@ def process_pot_stats(image_np, pot_masks, plant_masks, associations):
 
                 # 4. Integrate Embeddings
                 if "cls_token" in emb_res:
-                    plant_stats["embeddings"] = emb_res["cls_token"]
+                    plant_stats["cls_token"] = emb_res["cls_token"]
                 elif "error" in emb_res:
-                    plant_stats["embeddings_error"] = emb_res["error"]
+                    plant_stats["cls_token_error"] = emb_res["error"]
 
                 stats_dict[str(pot_id)] = plant_stats
             except Exception as e:

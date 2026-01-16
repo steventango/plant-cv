@@ -145,13 +145,13 @@ class TestPipelineTracking:
                         )
 
                         # Verify embeddings
-                        embeddings = stats.get("embeddings")
-                        assert embeddings is not None, (
-                            f"Frame {j}: embeddings missing for pot {first_pot_id}"
+                        cls_token = stats.get("cls_token", {})
+                        assert cls_token is not None, (
+                            f"Frame {j}: cls_token missing for pot {first_pot_id}"
                         )
-                        assert len(embeddings) == 768, (
-                            f"Frame {j}: embedding length mismatch for pot {first_pot_id}: {len(embeddings)}"
-                        )
+                        assert len(cls_token) == 768, (
+                            f"Frame {j}: cls_token length mismatch for pot {first_pot_id}: {len(cls_token)}"
+                        ) 
 
                         # Save warped image
                         w_b64 = stats.get("warped_image")
