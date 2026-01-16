@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 import requests
 from PIL import Image
+from requests.adapters import HTTPAdapter, Retry
 
 from app.plant.stats import analyze_plant_mask
 from app.pot.quad import mask_to_quadrilateral
@@ -84,7 +85,10 @@ def call_sam3_api(
         if state:
             payload["session_id"] = state
 
-    response = requests.post(server_url, json=payload, timeout=120)
+    session = requests.Session()
+    retries = Retry(total=kwargs.pop("max_retries", 5), backoff_factor=kwargs.pop("backoff_factor", 1.0), status_forcelist=[502, 503, 504])
+    session.mount("http://", HTTPAdapter(max_retries=retries))
+    response = session.post(server_url, json=payload, timeout=120)
     response.raise_for_status()
     return response.json()
 
