@@ -176,63 +176,71 @@ def associate_plants_to_pots(plant_masks, pot_masks, greedy=True):
         f"associate_plants_to_pots: {len(plant_masks)} plants, {len(pot_masks)} pots, greedy={greedy}"
     )
 
-    pairs = []
-    for plant in plant_masks:
-        p_box = plant["box"]
-        p_conf = plant.get("score", 1.0)
-        p_center = np.array([(p_box[0] + p_box[2]) / 2, (p_box[1] + p_box[3]) / 2])
+    # Convert to numpy arrays for vectorization
+    plant_boxes = np.array([m["box"] for m in plant_masks])
+    plant_confs = np.array([m.get("score", 1.0) for m in plant_masks])
+    plant_centers = np.column_stack(
+        [
+            (plant_boxes[:, 0] + plant_boxes[:, 2]) / 2,
+            (plant_boxes[:, 1] + plant_boxes[:, 3]) / 2,
+        ]
+    )
 
-        best_pot_id = None
-        max_score = -1.0
+    pot_boxes = np.array([m["box"] for m in pot_masks])
+    pot_centers = np.column_stack(
+        [
+            (pot_boxes[:, 0] + pot_boxes[:, 2]) / 2,
+            (pot_boxes[:, 1] + pot_boxes[:, 3]) / 2,
+        ]
+    )
+    pot_widths = pot_boxes[:, 2] - pot_boxes[:, 0]
+    pot_heights = pot_boxes[:, 3] - pot_boxes[:, 1]
+    pot_norms = np.maximum(np.maximum(pot_widths, pot_heights), 1e-6)
 
-        for pot in pot_masks:
-            b = pot["box"]
-            b_center = np.array([(b[0] + b[2]) / 2, (b[1] + b[3]) / 2])
-            b_width = b[2] - b[0]
-            b_height = b[3] - b[1]
+    # Compute distances: N_plants x M_pots
+    # diffs shape: (N, M, 2)
+    diffs = plant_centers[:, np.newaxis, :] - pot_centers[np.newaxis, :, :]
+    dists = np.linalg.norm(diffs, axis=2)  # (N, M)
 
-            # Normalization factor for distance: max dimension of pot
-            norm = max(b_width, b_height, 1e-6)
+    # Compute dist_score: (N, M)
+    dist_scores = np.maximum(0, 1.0 - (dists / pot_norms[np.newaxis, :]))
 
-            # 1. Centroid Distance Score (1.0 at center, 0.0 at roughly 1 pot-width away)
-            dist = np.linalg.norm(p_center - b_center)
-            dist_score = max(0, 1.0 - (dist / norm))
+    # Compute final score: (N, M)
+    scores = plant_confs[:, np.newaxis] * dist_scores
 
-            # 2. Composite Score
-            # Based on user feedback, we rely solely on centroid distance and confidence.
-            score = p_conf * dist_score
-
-            if score > max_score:
-                max_score = score
-                best_pot_id = pot["object_id"]
-
-            if greedy and score > 0.05:  # Minimum threshold to consider a pair
-                pairs.append(
-                    {
-                        "plant_id": str(plant["object_id"]),
-                        "pot_id": pot["object_id"],
-                        "score": score,
-                    }
-                )
-
-        if not greedy and best_pot_id is not None:
-            associations[str(plant["object_id"])] = best_pot_id
-
-    if greedy:
-        # Sort pairs by score descending
-        pairs.sort(key=lambda x: x["score"], reverse=True)
-
+    if not greedy:
+        # For each plant, find the best pot
+        best_pot_indices = np.argmax(scores, axis=1)
+        for i, plant in enumerate(plant_masks):
+            score = scores[i, best_pot_indices[i]]
+            if score > 0.05:
+                associations[str(plant["object_id"])] = pot_masks[best_pot_indices[i]][
+                    "object_id"
+                ]
+    else:
         # Greedy assignment
+        # Get all scores above threshold
+        plant_indices, pot_indices = np.where(scores > 0.05)
+        # Flattened scores for sorting
+        pair_scores = scores[plant_indices, pot_indices]
+
+        # Sort indices by score descending
+        sorted_indices = np.argsort(pair_scores)[::-1]
+
         used_plants = set()
         used_pots = set()
 
-        for pair in pairs:
-            p_id = pair["plant_id"]
-            pt_id = pair["pot_id"]
-            if p_id not in used_plants and pt_id not in used_pots:
-                associations[p_id] = pt_id
+        for idx in sorted_indices:
+            pi = plant_indices[idx]
+            pti = pot_indices[idx]
+
+            p_id = str(plant_masks[pi]["object_id"])
+            pot_obj_id = pot_masks[pti]["object_id"]
+
+            if p_id not in used_plants and pot_obj_id not in used_pots:
+                associations[p_id] = pot_obj_id
                 used_plants.add(p_id)
-                used_pots.add(pt_id)
+                used_pots.add(pot_obj_id)
 
     return associations
 
