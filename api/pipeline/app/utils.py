@@ -202,11 +202,22 @@ def associate_plants_to_pots(plant_masks, pot_masks, greedy=True):
     diffs = plant_centers[:, np.newaxis, :] - pot_centers[np.newaxis, :, :]
     dists = np.linalg.norm(diffs, axis=2)  # (N, M)
 
+    # check if plant center is inside pot box
+    # plant_centers: (N, 2), pot_boxes: (M, 4) [x1, y1, x2, y2]
+    # x_inside: (N, M), y_inside: (N, M)
+    x_inside = (plant_centers[:, 0][:, np.newaxis] >= pot_boxes[np.newaxis, :, 0]) & (
+        plant_centers[:, 0][:, np.newaxis] <= pot_boxes[np.newaxis, :, 2]
+    )
+    y_inside = (plant_centers[:, 1][:, np.newaxis] >= pot_boxes[np.newaxis, :, 1]) & (
+        plant_centers[:, 1][:, np.newaxis] <= pot_boxes[np.newaxis, :, 3]
+    )
+    inside = x_inside & y_inside
+
     # Compute dist_score: (N, M)
     dist_scores = np.maximum(0, 1.0 - (dists / pot_norms[np.newaxis, :]))
 
     # Compute final score: (N, M)
-    scores = plant_confs[:, np.newaxis] * dist_scores
+    scores = plant_confs[:, np.newaxis] * dist_scores * inside
 
     if not greedy:
         # For each plant, find the best pot
