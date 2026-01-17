@@ -5,28 +5,8 @@ from PIL import Image
 
 from app.utils import call_sam3_api
 
-# logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
-def filter_by_aspect_ratio(boxes, low: float = 0.5, high: float = 1.5):
-    """
-    Filter boxes by aspect ratio.
-    Default range [0.5, 1.5] relaxes the lower bound (was ~0.66)
-    while maintaining the upper bound (1.5) to avoid false positives like E11Z03 (AR 1.51).
-    """
-    widths = np.clip(boxes[:, 2] - boxes[:, 0], a_min=0, a_max=None)
-    heights = np.clip(boxes[:, 3] - boxes[:, 1], a_min=0, a_max=None)
-
-    with np.errstate(divide="ignore", invalid="ignore"):
-        aspect = widths / np.maximum(heights, 1e-6)
-    ar_mask = ((aspect >= low) & (aspect <= high)).astype(bool)
-    if np.sum(ar_mask) < len(boxes):
-        dropped = ~ar_mask
-        logger.debug(
-            f"AR Filter dropped {np.sum(dropped)} detected boxes. Aspects of dropped: {aspect[dropped]}"
-        )
-    return ar_mask
 
 
 def filter_by_areas(
@@ -101,66 +81,6 @@ def filter_by_areas(
     return inlier_mask
 
 
-def apply_nms(boxes, confidences, iou_threshold=0.55):
-    """
-    Apply Non-Maximum Suppression (NMS) to filter overlapping boxes.
-    Keeps box with higher confidence when IoU > threshold.
-    """
-    if len(boxes) == 0:
-        return np.array([], dtype=bool)
-
-    # Sort by confidence descending
-    indices = np.argsort(confidences)[::-1]
-    keep = []
-
-    while len(indices) > 0:
-        current = indices[0]
-        keep.append(current)
-
-        if len(indices) == 1:
-            break
-
-        # Compare current box with rest
-        rest_indices = indices[1:]
-
-        # Calculate IoU
-        # Coordinates
-        xx1 = np.maximum(boxes[current, 0], boxes[rest_indices, 0])
-        yy1 = np.maximum(boxes[current, 1], boxes[rest_indices, 1])
-        xx2 = np.minimum(boxes[current, 2], boxes[rest_indices, 2])
-        yy2 = np.minimum(boxes[current, 3], boxes[rest_indices, 3])
-
-        w = np.maximum(0, xx2 - xx1)
-        h = np.maximum(0, yy2 - yy1)
-        inter_area = w * h
-
-        # Area of boxes
-        area_current = (boxes[current, 2] - boxes[current, 0]) * (
-            boxes[current, 3] - boxes[current, 1]
-        )
-        area_rest = (boxes[rest_indices, 2] - boxes[rest_indices, 0]) * (
-            boxes[rest_indices, 3] - boxes[rest_indices, 1]
-        )
-
-        union_area = area_current + area_rest - inter_area
-        iou = inter_area / np.maximum(union_area, 1e-6)
-
-        # Keep boxes with small IoU (not overlapping significantly)
-        keep_mask = iou < iou_threshold
-        dropped_indices = rest_indices[~keep_mask]
-        if len(dropped_indices) > 0:
-            logger.debug(
-                f"NMS Suppressed indices {dropped_indices} due to IoU > {iou_threshold} (Max IoU {[f'{x:.2f}' for x in iou[~keep_mask]]}) with box {current}"
-            )
-
-        indices = rest_indices[keep_mask]
-
-    # Create mask
-    mask = np.zeros(len(boxes), dtype=bool)
-    mask[keep] = True
-    return mask
-
-
 def order_boxes(boxes):
     xs = (boxes[:, 0] + boxes[:, 2]) / 2
     ys = (boxes[:, 1] + boxes[:, 3]) / 2
@@ -168,7 +88,7 @@ def order_boxes(boxes):
     return order
 
 
-def filter_clipped_pots(boxes, areas, image_shape, margin=1, area_threshold=0.7):
+def filter_clipped_pots(boxes, areas, image_shape, margin=1, area_threshold=0.725):
     """
     Remove boxes that are touching the edge AND have an area significantly smaller than the median.
     """
@@ -203,7 +123,7 @@ def filter_clipped_pots(boxes, areas, image_shape, margin=1, area_threshold=0.7)
     return keep_mask
 
 
-def filter_pot_masks(masks, image_np, apply_nms_flag=False):
+def filter_pot_masks(masks, image_np):
     """
     Apply shared filtering logic to pot masks.
     """
@@ -215,15 +135,6 @@ def filter_pot_masks(masks, image_np, apply_nms_flag=False):
     confidences = np.array([m["score"] for m in masks])
     masks_np = np.array(masks)
 
-    # 1. Aspect ratio filter
-    ar_mask = filter_by_aspect_ratio(boxes, low=0.5, high=1.5)
-    logger.info(f"AR Filter: kept {np.sum(ar_mask)}/{len(boxes)}")
-    boxes = boxes[ar_mask]
-    confidences = confidences[ar_mask]
-    masks_np = masks_np[ar_mask]
-
-    if len(boxes) == 0:
-        return []
 
     # 2. Filter clipped pots
     widths = np.clip(boxes[:, 2] - boxes[:, 0], a_min=0, a_max=None)
@@ -252,19 +163,6 @@ def filter_pot_masks(masks, image_np, apply_nms_flag=False):
 
     if len(boxes) == 0:
         return []
-
-    # 4. Apply NMS (Optional)
-    if apply_nms_flag:
-        kept = apply_nms(boxes, confidences, iou_threshold=0.55)
-        logger.debug(f"NMS Filter: kept {np.sum(kept)}/{len(boxes)}")
-        masks_np = masks_np[kept]
-
-    # Order boxes in grid order
-    if len(masks_np) > 0:
-        # Re-extract boxes for ordering if they changed due to NMS
-        final_boxes = np.array([m["box"] for m in masks_np])
-        order = order_boxes(final_boxes)
-        masks_np = masks_np[order]
 
     logger.debug(f"filter_pot_masks: finished with {len(masks_np)} masks")
     return masks_np.tolist()
@@ -308,7 +206,7 @@ def detect_pots_sam3(image, state=None, extra_prompts=None, **kwargs):
 
     masks = result.get("masks", [])
 
-    filtered_masks = filter_pot_masks(masks, image_np, apply_nms_flag=True)
+    filtered_masks = filter_pot_masks(masks, image_np)
 
     if not filtered_masks:
         return (
