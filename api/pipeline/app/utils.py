@@ -156,7 +156,10 @@ def order_masks_row_major(masks):
 
 def associate_plants_to_pots(plant_masks, pot_masks, greedy=True):
     """
-    Associate plants with pots based on bounding box IOU.
+    Associate plants with pots based on a composite score of:
+    1. Centroid Distance (normalized by pot size)
+    2. Detection Confidence
+
     Returns a mapping of plant_object_id -> pot_object_id.
 
     Args:
@@ -169,60 +172,46 @@ def associate_plants_to_pots(plant_masks, pot_masks, greedy=True):
     if not plant_masks or not pot_masks:
         return associations
 
-    import sys
-
-    print(
-        f"DEBUG: STARTING associate_plants_to_pots with {len(plant_masks)} plants and {len(pot_masks)} pots",
-        file=sys.stderr,
-        flush=True,
+    logger.debug(
+        f"associate_plants_to_pots: {len(plant_masks)} plants, {len(pot_masks)} pots, greedy={greedy}"
     )
-    # Calculate all possible plant-pot IOUs
-    import sys
 
-    logger.error(
-        f"DEBUG: associate_plants_to_pots: {len(plant_masks)} plants, {len(pot_masks)} pots, greedy={greedy}"
-    )
-    for p in pot_masks:
-        logger.error(f"DEBUG: Pot {p['object_id']} box: {p['box']}")
     pairs = []
     for plant in plant_masks:
         p_box = plant["box"]
-        p_area = (p_box[2] - p_box[0]) * (p_box[3] - p_box[1])
+        p_conf = plant.get("score", 1.0)
+        p_center = np.array([(p_box[0] + p_box[2]) / 2, (p_box[1] + p_box[3]) / 2])
 
         best_pot_id = None
-        max_iou = 0.0
+        max_score = -1.0
 
         for pot in pot_masks:
             b = pot["box"]
-            b_area = (b[2] - b[0]) * (b[3] - b[1])
+            b_center = np.array([(b[0] + b[2]) / 2, (b[1] + b[3]) / 2])
+            b_width = b[2] - b[0]
+            b_height = b[3] - b[1]
 
-            # Calculate intersection
-            ix1 = max(p_box[0], b[0])
-            iy1 = max(p_box[1], b[1])
-            ix2 = min(p_box[2], b[2])
-            iy2 = min(p_box[3], b[3])
+            # Normalization factor for distance: max dimension of pot
+            norm = max(b_width, b_height, 1e-6)
 
-            iou = 0.0
-            if ix2 > ix1 and iy2 > iy1:
-                intersection_area = (ix2 - ix1) * (iy2 - iy1)
-                union_area = p_area + b_area - intersection_area
-                iou = intersection_area / max(union_area, 1e-6)
+            # 1. Centroid Distance Score (1.0 at center, 0.0 at roughly 1 pot-width away)
+            dist = np.linalg.norm(p_center - b_center)
+            dist_score = max(0, 1.0 - (dist / norm))
 
-            if pot["object_id"] in [15, 38]:
-                logger.error(
-                    f"DEBUG: Pot {pot['object_id']} (box {b}) with Plant {plant['object_id']} (box {p_box}) -> IOU: {iou:.4f}"
-                )
+            # 2. Composite Score
+            # Based on user feedback, we rely solely on centroid distance and confidence.
+            score = p_conf * dist_score
 
-            if iou > max_iou:
-                max_iou = iou
+            if score > max_score:
+                max_score = score
                 best_pot_id = pot["object_id"]
 
-            if greedy and iou > 0:
+            if greedy and score > 0.05:  # Minimum threshold to consider a pair
                 pairs.append(
                     {
                         "plant_id": str(plant["object_id"]),
                         "pot_id": pot["object_id"],
-                        "iou": iou,
+                        "score": score,
                     }
                 )
 
@@ -230,8 +219,8 @@ def associate_plants_to_pots(plant_masks, pot_masks, greedy=True):
             associations[str(plant["object_id"])] = best_pot_id
 
     if greedy:
-        # Sort pairs by IOU descending
-        pairs.sort(key=lambda x: x["iou"], reverse=True)
+        # Sort pairs by score descending
+        pairs.sort(key=lambda x: x["score"], reverse=True)
 
         # Greedy assignment
         used_plants = set()
@@ -244,14 +233,6 @@ def associate_plants_to_pots(plant_masks, pot_masks, greedy=True):
                 associations[p_id] = pt_id
                 used_plants.add(p_id)
                 used_pots.add(pt_id)
-                if pt_id in [15, 38]:
-                    logger.error(
-                        f"DEBUG: Pot {pt_id} ASSIGNED to Plant {p_id} (IOU: {pair.get('iou', 'N/A'):.4f})"
-                    )
-            elif pt_id in [15, 38] and pt_id not in used_pots:
-                logger.error(
-                    f"DEBUG: Pot {pt_id} NOT ASSIGNED to Plant {p_id} (IOU: {pair.get('iou', 'N/A'):.4f}) because plant {p_id} already used"
-                )
 
     return associations
 
