@@ -35,8 +35,11 @@ def detect():
     """
     try:
         data = request.json
+        state_in = data.get("state", {})
         image_data = data["image_data"]
         image = decode_image(image_data)
+
+        cleaning_state = state_in.get("cleaning_state")
 
         _, _, _, pot_state_from_sam3, sorted_pot_masks, _ = detect_pots_sam3(image)
 
@@ -65,8 +68,9 @@ def detect():
             plant_masks,
             sorted_pot_masks,
             sam3_session_id=pot_state_from_sam3,
+            cleaning_state=cleaning_state,
         )
-        response["plant_state"] = plant_state_from_sam3
+        response["state"]["plant_state"] = plant_state_from_sam3
 
         logger.info(
             f"detect: pot_masks={len(response['pot_masks'])}, ordered_pot_ids={len(response['ordered_pot_ids'])}"

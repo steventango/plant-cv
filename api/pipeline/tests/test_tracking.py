@@ -86,20 +86,18 @@ class TestPipelineTracking:
         TEST_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
         # Process frames
-        pot_state = None
-        plant_state = None
+        state_obj = None
 
         for j, (frame_path, timestamp) in enumerate(tqdm(video_frames)):
             image_data = encode_image_from_path(frame_path)
 
-            if pot_state is None:
+            if state_obj is None:
                 payload = {"image_data": image_data}
                 response = requests.post(DETECT_ENDPOINT, json=payload, timeout=120)
             else:
                 payload = {
                     "image_data": image_data,
-                    "pot_state": pot_state,
-                    "plant_state": plant_state,
+                    "state": state_obj,
                 }
                 response = requests.post(PROPAGATE_ENDPOINT, json=payload, timeout=120)
 
@@ -108,8 +106,12 @@ class TestPipelineTracking:
 
             result = response.json()
             print(f"\nResponse keys for frame {j}: {list(result.keys())}")
-            pot_state = result.get("pot_state")
-            plant_state = result.get("plant_state")
+
+            state_obj = result.get("state")
+            assert state_obj is not None, f"Frame {j}: state object missing"
+
+            pot_state = state_obj.get("pot_state")
+            plant_state = state_obj.get("plant_state")
             associations = result.get("associations", {})
             ordered_pot_ids = result.get("ordered_pot_ids", [])
             ordered_pot_ids_str = [str(x) for x in ordered_pot_ids]
@@ -151,7 +153,7 @@ class TestPipelineTracking:
                         )
                         assert len(cls_token) == 768, (
                             f"Frame {j}: cls_token length mismatch for pot {first_pot_id}: {len(cls_token)}"
-                        ) 
+                        )
 
                         # Save warped image
                         w_b64 = stats.get("warped_image")
@@ -175,10 +177,15 @@ class TestPipelineTracking:
                     if p_id in pot_to_plant:
                         plant_id = pot_to_plant[p_id]
                         if p_id in plant_stats:
-                            p_area = plant_stats[p_id].get("area", 0)
-                            print(
-                                f"DEBUG: Pot {p_id} (Plant {plant_id}) area: {p_area:.0f} mm²"
-                            )
+                            p_area = plant_stats[p_id].get("area")
+                            if p_area is not None:
+                                print(
+                                    f"DEBUG: Pot {p_id} (Plant {plant_id}) area: {p_area:.0f} mm²"
+                                )
+                            else:
+                                print(
+                                    f"DEBUG: Pot {p_id} (Plant {plant_id}) area: None (Missing)"
+                                )
                         else:
                             print(f"DEBUG: Pot {p_id} (Plant {plant_id}) has no stats")
                     elif (

@@ -15,6 +15,10 @@ from app.plant.stats import analyze_plant_mask
 from app.pot.quad import mask_to_quadrilateral
 from app.pot.visualize import visualize_pipeline_tracking
 from app.pot.warp import warp_quad_to_square
+from app.analysis import (
+    apply_tukey_outlier_detection_frame,
+    update_plant_cleaning_state,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -441,6 +445,7 @@ def process_pot_stats(image_np, pot_masks, plant_masks, associations):
                     "warped_pot": warped_pot,
                     "warped_plant_mask": warped_plant_mask,
                     "warped_b64": warped_b64,
+                    "plant_id": plant_info["object_id"],
                 }
             )
         except Exception as e:
@@ -467,6 +472,8 @@ def process_pot_stats(image_np, pot_masks, plant_masks, associations):
                 elif "error" in emb_res:
                     plant_stats["cls_token_error"] = emb_res["error"]
 
+                plant_stats["plant_id"] = info["plant_id"]
+                plant_stats["pot_id"] = pot_id
                 stats_dict[str(pot_id)] = plant_stats
             except Exception as e:
                 logger.error(f"Error finalising stats for pot {pot_id}: {e}")
@@ -570,6 +577,7 @@ def process_pipeline_outputs(
     pot_masks_raw,
     id_map=None,
     sam3_session_id=None,
+    cleaning_state=None,
 ):
     """
     Common post-processing for both detect and propagate endpoints.
@@ -577,6 +585,7 @@ def process_pipeline_outputs(
     response = {}
 
     # 1. ID Mapping
+    state = {}
     if id_map is not None:
         pot_masks, updated_id_map = apply_id_mapping(pot_masks_raw, id_map)
     else:
@@ -592,7 +601,7 @@ def process_pipeline_outputs(
             pot_masks.append(m_new)
 
     if sam3_session_id is not None:
-        response["pot_state"] = wrap_state(sam3_session_id, updated_id_map)
+        state["pot_state"] = wrap_state(sam3_session_id, updated_id_map)
 
     # 2. Refine plant masks
     plant_masks, associations = refine_plant_masks(image_np, plant_masks, pot_masks)
@@ -609,8 +618,84 @@ def process_pipeline_outputs(
         image_np, ordered_pot_masks, plant_masks, associations
     )
 
+    # 5. Apply Stat Cleaning
+    # Collect valid stats for Tukey
+    valid_stats_list = []
+    for s in plant_stats.values():
+        if s and "error" not in s:
+            valid_stats_list.append(s)
+
+    apply_tukey_outlier_detection_frame(valid_stats_list)
+
+    if cleaning_state is None:
+        cleaning_state = {}
+
+    new_cleaning_state = {}
+
+    # Map plant_id -> stats
+    pid_to_stats = {}
+    for s in valid_stats_list:
+        pid = str(s.get("plant_id"))
+        if pid:
+            pid_to_stats[pid] = s
+
+    # Identify all plant IDs to process (current + stored)
+    all_pids = set(pid_to_stats.keys()).union(cleaning_state.keys())
+    logger.info(
+        f"DEBUG: Processing pids: {all_pids} (cleaning keys: {list(cleaning_state.keys())})"
+    )
+
+    for p_id in all_pids:
+        s = pid_to_stats.get(p_id)
+        current_state = cleaning_state.get(p_id)
+
+        p_mask_obj = next(
+            (m for m in plant_masks if str(m.get("object_id")) == p_id), None
+        )
+        updated_state, clean_values, clean_mask = update_plant_cleaning_state(
+            s, current_state, p_mask_obj
+        )
+
+        if s:
+            updated_state["last_pot_id"] = s.get("pot_id")
+
+        new_cleaning_state[p_id] = updated_state
+
+        if s:
+            s.update(clean_values)
+            if p_mask_obj and clean_mask and clean_mask is not p_mask_obj:
+                p_mask_obj.update(clean_mask)
+
+        elif clean_values.get("is_missing"):
+            last_pot_id = updated_state.get("last_pot_id")
+            prev_mask = updated_state.get("prev_clean_mask")
+            logger.info(
+                f"DEBUG: Plant {p_id} missing. Last pot: {last_pot_id}, Has mask: {prev_mask is not None}"
+            )
+
+            if last_pot_id is not None:
+                full_stats = {
+                    "plant_id": int(p_id),
+                    "pot_id": last_pot_id,
+                    "area": None,
+                    **clean_values,
+                }
+
+                pid_str = str(last_pot_id)
+                if pid_str not in plant_stats or plant_stats[pid_str] is None:
+                    plant_stats[pid_str] = full_stats
+
+                if prev_mask:
+                    plant_masks.append(prev_mask)
+                    if last_pot_id is not None:
+                        associations[str(p_id)] = last_pot_id
+
+    final_cleaning_state = cleaning_state.copy()
+    final_cleaning_state.update(new_cleaning_state)
+    state["cleaning_state"] = final_cleaning_state
     response.update(
         {
+            "state": state,
             "pot_masks": ordered_pot_masks,
             "plant_masks": plant_masks,
             "associations": associations,

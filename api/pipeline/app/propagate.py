@@ -38,9 +38,12 @@ def propagate():
     """
     try:
         data = request.json
+        state_in = data.get("state", {})
+
         image_data = data["image_data"]
-        pot_state = data.get("pot_state")
-        plant_state = data.get("plant_state")
+        pot_state = state_in.get("pot_state")
+        plant_state = state_in.get("plant_state")
+        cleaning_state = state_in.get("cleaning_state")
         image = decode_image(image_data)
         image_np = np.array(image)
         h, w = image_np.shape[:2]
@@ -89,8 +92,9 @@ def propagate():
                 p_masks_raw,
                 id_map=id_map,
                 sam3_session_id=pot_result.get("session_id"),
+                cleaning_state=cleaning_state,
             )
-            response["plant_state"] = plant_session_id
+            response["state"]["plant_state"] = plant_session_id
             response["debug_plant_mask_sam3_count"] = len(plant_masks)
             response["debug_pot_masks_count"] = len(p_masks_raw)
 
