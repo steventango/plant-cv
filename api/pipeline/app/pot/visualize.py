@@ -138,8 +138,9 @@ def visualize_pipeline_tracking(
                         pot_stat = plant_stats.get(str(pot_id))
                         if pot_stat and "clean_area" in pot_stat:
                             area = pot_stat["clean_area"]
+                            current_area = pot_stat.get("area", 0)
                             area_text = (
-                                f"{'*' if area != pot_stat['area'] else ''}{area:.0f}"
+                                f"{'*' if current_area != area else ''}{area:.0f}"
                             )
                     labels.append(area_text)
                 else:
