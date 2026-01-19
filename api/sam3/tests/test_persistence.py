@@ -16,7 +16,7 @@ sys.modules["glob"] = MagicMock()
 
 # Add app to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../app")))
-import caching
+import caching  # noqa: E402
 
 
 class TestPersistence(unittest.TestCase):

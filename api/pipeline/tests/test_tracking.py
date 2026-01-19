@@ -221,7 +221,6 @@ class TestPipelineTracking:
             if len(pot_masks) > 1:
                 # Check for row-major order (Y then X)
                 boxes = np.array([m["box"] for m in pot_masks])
-                xs = (boxes[:, 0] + boxes[:, 2]) / 2
                 ys = (boxes[:, 1] + boxes[:, 3]) / 2
                 for k in range(len(ys) - 1):
                     # In a perfect world ys[j] <= ys[j+1].
