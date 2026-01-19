@@ -149,4 +149,3 @@ class TestEmbeddings:
         assert "cls_token" in result
         cls_token = np.array(result["cls_token"])
         assert cls_token.shape == (768,)
-

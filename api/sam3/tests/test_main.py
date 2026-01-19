@@ -11,7 +11,6 @@ VIDEO_URL = "https://huggingface.co/datasets/hf-internal-testing/sam2-fixtures/r
 TEXT_PROMPT = "person"
 
 
-
 def check_service_available():
     """Check if SAM3 service is available."""
     try:

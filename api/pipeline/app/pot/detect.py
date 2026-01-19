@@ -8,7 +8,6 @@ from app.utils import call_sam3_api
 logger = logging.getLogger(__name__)
 
 
-
 def filter_by_areas(
     boxes, areas, image_np, confidences=None, stats_conf_threshold=0.03
 ):
@@ -134,7 +133,6 @@ def filter_pot_masks(masks, image_np):
     boxes = np.array([m["box"] for m in masks])
     confidences = np.array([m["score"] for m in masks])
     masks_np = np.array(masks)
-
 
     # 2. Filter clipped pots
     widths = np.clip(boxes[:, 2] - boxes[:, 0], a_min=0, a_max=None)
