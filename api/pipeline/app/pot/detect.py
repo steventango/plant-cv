@@ -3,30 +3,9 @@ import logging
 import numpy as np
 from PIL import Image
 
-from app.utils import call_grounding_dino_api
+from app.utils import call_sam3_api
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-def filter_by_aspect_ratio(boxes, low: float = 0.5, high: float = 1.5):
-    """
-    Filter boxes by aspect ratio.
-    Default range [0.5, 1.5] relaxes the lower bound (was ~0.66)
-    while maintaining the upper bound (1.5) to avoid false positives like E11Z03 (AR 1.51).
-    """
-    widths = np.clip(boxes[:, 2] - boxes[:, 0], a_min=0, a_max=None)
-    heights = np.clip(boxes[:, 3] - boxes[:, 1], a_min=0, a_max=None)
-
-    with np.errstate(divide="ignore", invalid="ignore"):
-        aspect = widths / np.maximum(heights, 1e-6)
-    ar_mask = ((aspect >= low) & (aspect <= high)).astype(bool)
-    if np.sum(ar_mask) < len(boxes):
-        dropped = ~ar_mask
-        logger.debug(
-            f"AR Filter dropped {np.sum(dropped)} detected boxes. Aspects of dropped: {aspect[dropped]}"
-        )
-    return ar_mask
 
 
 def filter_by_areas(
@@ -101,93 +80,6 @@ def filter_by_areas(
     return inlier_mask
 
 
-def filter_by_confidence(confidences):
-    gap = 0.08
-    # Filter by confidence - find first gap >= 0.05 between sorted confidences
-    conf_mask = np.ones(len(confidences), dtype=bool)  # Initialize to keep all
-
-    if len(confidences) >= 2:
-        sorted_confidences = np.sort(confidences)
-        # Calculate gaps between consecutive sorted confidences
-        gaps = np.diff(sorted_confidences)
-
-        # Find the first gap >= gap
-        gap_indices = np.where(gaps >= gap)[0]
-
-        if len(gap_indices) > 0:
-            # Set threshold to the confidence value after the first large gap
-            first_gap_idx = gap_indices[0]
-            threshold = sorted_confidences[first_gap_idx + 1]
-            conf_mask = (confidences >= threshold).astype(bool)
-
-    if not conf_mask.any():
-        # Fallback: keep highest confidence box
-        best_idx = int(np.argmax(confidences))
-        conf_mask = np.zeros_like(conf_mask, dtype=bool)
-        conf_mask[best_idx] = True
-    return conf_mask
-
-
-def apply_nms(boxes, confidences, iou_threshold=0.55):
-    """
-    Apply Non-Maximum Suppression (NMS) to filter overlapping boxes.
-    Keeps box with higher confidence when IoU > threshold.
-    """
-    if len(boxes) == 0:
-        return np.array([], dtype=bool)
-
-    # Sort by confidence descending
-    indices = np.argsort(confidences)[::-1]
-    keep = []
-
-    while len(indices) > 0:
-        current = indices[0]
-        keep.append(current)
-
-        if len(indices) == 1:
-            break
-
-        # Compare current box with rest
-        rest_indices = indices[1:]
-
-        # Calculate IoU
-        # Coordinates
-        xx1 = np.maximum(boxes[current, 0], boxes[rest_indices, 0])
-        yy1 = np.maximum(boxes[current, 1], boxes[rest_indices, 1])
-        xx2 = np.minimum(boxes[current, 2], boxes[rest_indices, 2])
-        yy2 = np.minimum(boxes[current, 3], boxes[rest_indices, 3])
-
-        w = np.maximum(0, xx2 - xx1)
-        h = np.maximum(0, yy2 - yy1)
-        inter_area = w * h
-
-        # Area of boxes
-        area_current = (boxes[current, 2] - boxes[current, 0]) * (
-            boxes[current, 3] - boxes[current, 1]
-        )
-        area_rest = (boxes[rest_indices, 2] - boxes[rest_indices, 0]) * (
-            boxes[rest_indices, 3] - boxes[rest_indices, 1]
-        )
-
-        union_area = area_current + area_rest - inter_area
-        iou = inter_area / np.maximum(union_area, 1e-6)
-
-        # Keep boxes with small IoU (not overlapping significantly)
-        keep_mask = iou < iou_threshold
-        dropped_indices = rest_indices[~keep_mask]
-        if len(dropped_indices) > 0:
-            logger.debug(
-                f"NMS Suppressed indices {dropped_indices} due to IoU > {iou_threshold} (Max IoU {[f'{x:.2f}' for x in iou[~keep_mask]]}) with box {current}"
-            )
-
-        indices = rest_indices[keep_mask]
-
-    # Create mask
-    mask = np.zeros(len(boxes), dtype=bool)
-    mask[keep] = True
-    return mask
-
-
 def order_boxes(boxes):
     xs = (boxes[:, 0] + boxes[:, 2]) / 2
     ys = (boxes[:, 1] + boxes[:, 3]) / 2
@@ -195,124 +87,145 @@ def order_boxes(boxes):
     return order
 
 
-def detect_pots(image, text_prompt="pot", threshold=0.01, text_threshold=0):
+def filter_clipped_pots(boxes, areas, image_shape, margin=1, area_threshold=0.725):
     """
-    Detect pots in an image and filter outliers.
+    Remove boxes that are touching the edge AND have an area significantly smaller than the median.
+    """
+    h, w = image_shape[:2]
+    # boxes are [x1, y1, x2, y2]
+    x1 = boxes[:, 0]
+    y1 = boxes[:, 1]
+    x2 = boxes[:, 2]
+    y2 = boxes[:, 3]
+
+    # Check if touching edge
+    touching_edge = (
+        (x1 < margin) | (y1 < margin) | (x2 > w - margin) | (y2 > h - margin)
+    )
+
+    if not np.any(touching_edge):
+        return np.ones(len(boxes), dtype=bool)
+
+    median_area = np.median(areas)
+    # Filter if touching edge AND area < area_threshold * median
+    small_area = areas < (area_threshold * median_area)
+
+    # We want to DROP if (touching_edge AND small_area)
+    # So we KEEP if NOT (touching_edge AND small_area)
+    keep_mask = ~(touching_edge & small_area)
+
+    if np.sum(keep_mask) < len(boxes):
+        dropped = ~keep_mask
+        logger.debug(
+            f"Clipped Pot Filter dropped {np.sum(dropped)} boxes. Areas: {areas[dropped]}, Median: {median_area}"
+        )
+    return keep_mask
+
+
+def filter_pot_masks(masks, image_np):
+    """
+    Apply shared filtering logic to pot masks.
+    """
+    if not masks:
+        return []
+
+    # Convert mask info to boxes and confidences
+    boxes = np.array([m["box"] for m in masks])
+    confidences = np.array([m["score"] for m in masks])
+    masks_np = np.array(masks)
+
+    # 2. Filter clipped pots
+    widths = np.clip(boxes[:, 2] - boxes[:, 0], a_min=0, a_max=None)
+    heights = np.clip(boxes[:, 3] - boxes[:, 1], a_min=0, a_max=None)
+    current_areas = widths * heights
+
+    edge_mask = filter_clipped_pots(boxes, current_areas, image_np.shape, margin=1)
+    logger.info(f"Clipped Filter: kept {np.sum(edge_mask)}/{len(boxes)}")
+    boxes = boxes[edge_mask]
+    confidences = confidences[edge_mask]
+    masks_np = masks_np[edge_mask]
+
+    if len(boxes) == 0:
+        return []
+
+    # 3. Area filter
+    widths = np.clip(boxes[:, 2] - boxes[:, 0], a_min=0, a_max=None)
+    heights = np.clip(boxes[:, 3] - boxes[:, 1], a_min=0, a_max=None)
+    areas = widths * heights
+
+    inlier_mask = filter_by_areas(boxes, areas, image_np, confidences=confidences)
+    logger.info(f"Area Filter: kept {np.sum(inlier_mask)}/{len(boxes)}")
+    boxes = boxes[inlier_mask]
+    confidences = confidences[inlier_mask]
+    masks_np = masks_np[inlier_mask]
+
+    if len(boxes) == 0:
+        return []
+
+    logger.debug(f"filter_pot_masks: finished with {len(masks_np)} masks")
+    return masks_np.tolist()
+
+
+def detect_pots_sam3(image, state=None, extra_prompts=None, **kwargs):
+    """
+    Detect pots in an image using SAM3 and filter outliers.
 
     Args:
         image: PIL Image or numpy array
-        text_prompt: Text prompt for detection (default: "pot")
-        threshold: Confidence threshold
-        text_threshold: Text threshold
+        state: Previous pot tracking state (for propagate mode)
+        **kwargs: Additional parameters for SAM3 (e.g., threshold, recondition_every_nth_frame)
+
 
     Returns:
         boxes: Filtered numpy array of boxes [x1, y1, x2, y2] in grid order
         confidences: Filtered confidence scores
         class_names: Filtered class names
+        state: Updated pot tracking state
+        masks: Filtered list of mask dictionaries
+        raw_result: The full result from SAM3 API (useful for extra_prompts)
     """
+
     if isinstance(image, np.ndarray):
         image_np = image
         image = Image.fromarray(image)
     else:
         image_np = np.array(image)
 
-    boxes, confidences, class_names = call_grounding_dino_api(
-        image=image,
-        text_prompt=text_prompt,
-        threshold=threshold,
-        text_threshold=text_threshold,
-    )
-    boxes, confidences, class_names = call_grounding_dino_api(
-        image=image,
-        text_prompt=text_prompt,
-        threshold=threshold,
-        text_threshold=text_threshold,
-    )
-    logger.debug(f"Model returned {len(boxes)} boxes.")
+    if "score_threshold_detection" not in kwargs:
+        kwargs["score_threshold_detection"] = 0.3
 
-    if len(boxes) == 0:
-        return boxes, confidences, class_names
+    # Determine endpoint based on whether we have previous state
+    if state is None:
+        result = call_sam3_api(
+            image, endpoint="detect", text_prompt="plant pot", **kwargs
+        )
+    else:
+        result = call_sam3_api(image, endpoint="propagate", state=state, **kwargs)
 
-    ar_mask = filter_by_aspect_ratio(boxes, low=0.5, high=1.5)
-    boxes = boxes[ar_mask]
-    confidences = confidences[ar_mask]
-    class_names = class_names[ar_mask]
+    masks = result.get("masks", [])
 
-    widths = np.clip(boxes[:, 2] - boxes[:, 0], a_min=0, a_max=None)
-    heights = np.clip(boxes[:, 3] - boxes[:, 1], a_min=0, a_max=None)
-    areas = widths * heights
+    filtered_masks = filter_pot_masks(masks, image_np)
 
-    inlier_mask = filter_by_areas(boxes, areas, image_np, confidences=confidences)
-    boxes = boxes[inlier_mask]
-    confidences = confidences[inlier_mask]
-
-    if len(confidences) > 0:
-        logger.debug(f"Post-Area Filter Confidences: {np.sort(confidences)}")
-
-    class_names = (
-        class_names[inlier_mask]
-        if class_names.shape[0] == inlier_mask.shape[0]
-        else class_names
-    )
-
-    conf_mask = filter_by_confidence(confidences)
-    if np.sum(conf_mask) < len(boxes):
-        dropped = ~conf_mask
-        logger.debug(
-            f"Confidence Filter dropped {np.sum(dropped)} boxes. Confidences of dropped: {confidences[dropped]}"
+    if not filtered_masks:
+        return (
+            np.array([]),
+            np.array([]),
+            np.array([]),
+            result.get("session_id"),
+            [],
+            result,
         )
 
-    boxes = boxes[conf_mask]
-    confidences = confidences[conf_mask]
-    class_names = (
-        class_names[conf_mask]
-        if class_names.shape[0] == conf_mask.shape[0]
-        else class_names
+    # Convert back to arrays for the expected return format
+    boxes = np.array([m["box"] for m in filtered_masks])
+    confidences = np.array([m["score"] for m in filtered_masks])
+    class_names = np.array(["pot"] * len(filtered_masks))
+
+    return (
+        boxes,
+        confidences,
+        class_names,
+        result.get("session_id"),
+        filtered_masks,
+        result,
     )
-
-    # Hybrid Filter: Drop boxes that are BOTH small AND low confidence
-    # This targets "weed" false positives that look somewhat like pots but are statistically weak
-    if len(boxes) >= 2:
-        widths = np.clip(boxes[:, 2] - boxes[:, 0], a_min=0, a_max=None)
-        heights = np.clip(boxes[:, 3] - boxes[:, 1], a_min=0, a_max=None)
-        areas = widths * heights
-        img_area = image_np.shape[0] * image_np.shape[1]
-
-        # Recalculate robust median of surviving boxes
-        stats_areas = areas[areas <= 0.2 * img_area]
-        if len(stats_areas) < 2:
-            stats_areas = areas
-
-        if len(stats_areas) > 0:
-            median_area = float(np.median(stats_areas))
-
-            # Condition: Area < 60% of Median AND Confidence < 0.08
-            is_small = areas < (median_area * 0.6)
-            is_low_conf = confidences < 0.08
-            to_drop = is_small & is_low_conf
-
-            if np.any(to_drop):
-                logger.debug(
-                    f"Hybrid Filter dropped {np.sum(to_drop)} boxes. Areas: {areas[to_drop]}, Confidences: {confidences[to_drop]}"
-                )
-                keep_mask = ~to_drop
-                boxes = boxes[keep_mask]
-                confidences = confidences[keep_mask]
-                class_names = class_names[keep_mask]
-
-    kept = apply_nms(boxes, confidences, iou_threshold=0.55)
-    if np.sum(kept) < len(boxes):
-        dropped = ~kept
-        logger.debug(f"NMS Filter dropped {np.sum(dropped)} boxes.")
-
-    boxes = boxes[kept]
-    confidences = confidences[kept]
-    class_names = class_names[kept]
-
-    if len(boxes) > 0:
-        order = order_boxes(boxes)
-        boxes = boxes[order]
-        confidences = confidences[order]
-        class_names = class_names[order]
-
-    return boxes, confidences, class_names

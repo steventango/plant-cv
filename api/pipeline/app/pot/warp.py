@@ -66,6 +66,12 @@ def warp_quad_to_square(
     )
 
     if output_size is not None and output_size != side:
+        # Update H to account for resize
+        scale_val = output_size / side
+        S = np.array(
+            [[scale_val, 0, 0], [0, scale_val, 0], [0, 0, 1]], dtype=np.float32
+        )
+        H = S @ H
         warped = cv2.resize(warped, (output_size, output_size))
 
     return warped, H

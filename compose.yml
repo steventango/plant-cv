@@ -27,13 +27,13 @@ services:
               capabilities:
                 - gpu
 
-  grounding-dino:
+  sam3:
     build:
       args:
         USERNAME: ${USERNAME}
         USER_UID: ${HOST_UID}
         USER_GID: ${HOST_GID}
-      context: api/grounding_dino
+      context: api/sam3
       dockerfile: Dockerfile
     env_file: .env
     networks:
@@ -42,38 +42,10 @@ services:
     restart: unless-stopped
     user: "${HOST_UID}:${HOST_GID}"
     volumes:
-      - ./api/grounding_dino:/app
+      - ./api/sam3:/app
       - ~/.cache:/home/${USERNAME}/.cache:cached
     ports:
-      - "8801:8801"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities:
-                - gpu
-
-  segment-anything:
-    build:
-      args:
-        USERNAME: ${USERNAME}
-        USER_UID: ${HOST_UID}
-        USER_GID: ${HOST_GID}
-      context: api/segment_anything
-      dockerfile: Dockerfile
-    env_file: .env
-    networks:
-      - plant-network
-    privileged: true
-    restart: unless-stopped
-    user: "${HOST_UID}:${HOST_GID}"
-    volumes:
-      - ./api/segment_anything:/app
-      - ~/.cache:/home/${USERNAME}/.cache:cached
-    ports:
-      - "8802:8802"
+      - "8805:8805"
     deploy:
       resources:
         reservations:
@@ -104,8 +76,7 @@ services:
       - ~/.cache:/home/${USERNAME}/.cache:cached
     depends_on:
       - embeddings
-      - grounding-dino
-      - segment-anything
+      - sam3
 
 networks:
   plant-network:

@@ -1,5 +1,5 @@
 import numpy as np
-from app.plant.visualize import visualize_annotation
+from ..app.plant.visualize import visualize_annotation
 from PIL import Image
 from pathlib import Path
 
