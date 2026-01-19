@@ -42,6 +42,23 @@ def convert_px_to_mm(metrics: dict, scale: float) -> dict:
     return metrics
 
 
+def calculate_histogram_mean(histogram: list) -> float:
+    """
+    Calculate the mean value from a frequency histogram.
+    """
+    hist = np.array(histogram)
+    if hist.sum() == 0:
+        return 0.0
+
+    values = np.arange(len(hist))
+    repeated_values = np.repeat(values, hist.astype(int))
+
+    if len(repeated_values) == 0:
+        return 0.0
+
+    return float(np.mean(repeated_values))
+
+
 def analyze_plant_mask(
     warped_image_np: np.ndarray,
     mask_binary: np.ndarray,
@@ -99,23 +116,34 @@ def analyze_plant_mask(
         # Return empty stats if analysis fails
         logger.error(f"PlantCV analysis failed: {e}")
         return {
-            "area": 0.0,
-            "convex_hull_area": 0.0,
-            "solidity": 0.0,
-            "perimeter": 0.0,
-            "width": 0.0,
-            "height": 0.0,
-            "longest_path": 0.0,
-            "center_of_mass_x": 0.0,
-            "center_of_mass_y": 0.0,
+            "area": None,
+            "convex_hull_area": None,
+            "solidity": None,
+            "perimeter": None,
+            "width": None,
+            "height": None,
+            "longest_path": None,
+            "center_of_mass_x": None,
+            "center_of_mass_y": None,
             "convex_hull_vertices": 0,
             "object_in_frame": 0,
-            "ellipse_center_x": 0.0,
-            "ellipse_center_y": 0.0,
-            "ellipse_major_axis": 0.0,
-            "ellipse_minor_axis": 0.0,
-            "ellipse_angle": 0.0,
-            "ellipse_eccentricity": 0.0,
+            "ellipse_center_x": None,
+            "ellipse_center_y": None,
+            "ellipse_major_axis": None,
+            "ellipse_minor_axis": None,
+            "ellipse_angle": None,
+            "ellipse_eccentricity": None,
+            "blue-yellow_frequencies_mean": None,
+            "blue_frequencies_mean": None,
+            "green-magenta_frequencies_mean": None,
+            "green_frequencies_mean": None,
+            "hue_circular_mean": None,
+            "hue_circular_std": None,
+            "hue_frequencies_mean": None,
+            "lightness_frequencies_mean": None,
+            "red_frequencies_mean": None,
+            "saturation_frequencies_mean": None,
+            "value_frequencies_mean": None,
             "error": str(e),
         }, None
 
@@ -127,9 +155,8 @@ def analyze_plant_mask(
         for variable, value in observation.items():
             if variable in ["center_of_mass", "ellipse_center"]:
                 stats[variable + "_x"], stats[variable + "_y"] = value["value"]
-            elif variable == "histogram":
-                # Histogram is usually a large list, we might want to skip it or summarize
-                continue
+            elif "frequencies" in variable:
+                stats[f"{variable}_mean"] = calculate_histogram_mean(value["value"])
             else:
                 stats[variable] = value["value"]
 
