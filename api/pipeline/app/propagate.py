@@ -73,7 +73,7 @@ def propagate():
                     endpoint="propagate",
                     state=plant_state,
                     recondition_on_trk_masks=True,
-                    recondition_every_nth_frame=11,
+                    recondition_every_nth_frame=1,
                     score_threshold_detection=0.165,
                     high_conf_thresh=0.165,
                     high_iou_thresh=0.0001,
