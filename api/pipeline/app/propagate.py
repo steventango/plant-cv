@@ -3,7 +3,6 @@ import logging
 import numpy as np
 from flask import Blueprint, jsonify, request
 
-from app.pot.detect import filter_pot_masks
 from app.utils import (
     call_sam3_api,
     decode_image,
@@ -50,19 +49,9 @@ def propagate():
 
         response = {}
         plant_masks = []
-        sam3_pot_state, id_map = unwrap_state(pot_state)
+        pot_session_id, id_map, p_masks_raw = unwrap_state(pot_state)
 
         if pot_state:
-            pot_result = call_sam3_api(
-                image,
-                endpoint="propagate",
-                state=sam3_pot_state,
-                score_threshold_detection=0.15,
-            )
-
-            # Filter recomputed masks
-            p_masks_raw = filter_pot_masks(pot_result.get("masks", []), image_np)
-
             # --- PLANT DETECTION ---
             plant_masks = []
             plant_session_id = None
@@ -91,7 +80,7 @@ def propagate():
                 plant_masks,
                 p_masks_raw,
                 id_map=id_map,
-                sam3_session_id=pot_result.get("session_id"),
+                sam3_session_id=pot_session_id,
                 cleaning_state=cleaning_state,
             )
             response["state"]["plant_state"] = plant_session_id
