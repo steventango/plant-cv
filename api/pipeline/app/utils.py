@@ -260,27 +260,31 @@ def associate_plants_to_pots(plant_masks, pot_masks, greedy=True):
     return associations
 
 
-def wrap_state(sam3_state, id_map):
-    """Wrap SAM3 state and ID map into a single base64 string."""
-    data = {"sam3_state": sam3_state, "id_map": id_map}
+def wrap_state(sam3_state, id_map, pot_masks=None):
+    """Wrap SAM3 state, ID map, and pot masks into a single base64 string."""
+    data = {"sam3_state": sam3_state, "id_map": id_map, "pot_masks": pot_masks}
     json_str = json.dumps(data)
     return base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
 
 
 def unwrap_state(wrapped_state):
-    """Unwrap SAM3 state and ID map from a base64 string."""
+    """Unwrap SAM3 state, ID map, and pot masks from a base64 string."""
     if not wrapped_state:
-        return None, {}
+        return None, {}, None
     try:
         # Check if it's our JSON wrapper or raw SAM3 state
         decoded = base64.b64decode(wrapped_state).decode("utf-8")
         data = json.loads(decoded)
         if isinstance(data, dict) and "sam3_state" in data:
-            return data["sam3_state"], data.get("id_map", {})
+            return (
+                data["sam3_state"],
+                data.get("id_map", {}),
+                data.get("pot_masks"),
+            )
     except Exception:
         # If decoding fails, assume it's a raw SAM3 state
         pass
-    return wrapped_state, {}
+    return wrapped_state, {}, None
 
 
 def refine_plant_masks(image_np, plant_masks, pot_masks):
@@ -482,95 +486,6 @@ def process_pot_stats(image_np, pot_masks, plant_masks, associations):
     return stats_dict
 
 
-def refine_pot_masks_with_plants(pot_masks, plant_masks, associations, image_shape):
-    """
-    Refine pot masks by subtracting associated plant masks and applying morphological cleanup.
-
-    This handles plants that outgrow the true pot boundaries by:
-    1. Subtracting the plant mask from the pot mask
-    2. Applying morphological closing (to fill small holes)
-    3. Applying morphological opening (to remove noise/artifacts)
-    4. Using convex hull for a clean pot shape
-    """
-    h, w = image_shape[:2]
-    plant_map = {str(p["object_id"]): p for p in plant_masks}
-
-    # Invert associations for easier lookup: pot_id -> plant_id
-    pot_to_plant = {}
-    for p_id_str, pot_id in associations.items():
-        pot_to_plant[pot_id] = p_id_str
-
-    # Morphological kernels
-    close_kernel = np.ones((15, 15), np.uint8)  # Closing to fill small holes
-    open_kernel = np.ones((7, 7), np.uint8)  # Opening to remove noise
-
-    for pot in pot_masks:
-        pot_id = pot["object_id"]
-        plant_id_str = pot_to_plant.get(pot_id)
-
-        if not plant_id_str:
-            continue
-
-        plant = plant_map.get(plant_id_str)
-        if not plant:
-            continue
-
-        if "contour" not in pot or not pot["contour"]:
-            continue
-
-        # Create pot mask
-        pot_mask = np.zeros((h, w), dtype=np.uint8)
-        cv2.fillPoly(pot_mask, [np.array(pot["contour"], dtype=np.int32)], 255)
-
-        # Create plant mask
-        plant_mask = np.zeros((h, w), dtype=np.uint8)
-        if "contours" in plant and plant["contours"]:
-            polys = []
-            for c in plant["contours"]:
-                poly = np.array(c, dtype=np.int32)
-                if poly.ndim == 2 and poly.shape[0] > 0:
-                    polys.append(poly)
-            if polys:
-                cv2.fillPoly(plant_mask, polys, 255)
-        elif "contour" in plant and plant["contour"]:
-            poly = np.array(plant["contour"], dtype=np.int32)
-            if poly.ndim == 2 and poly.shape[0] > 0:
-                cv2.fillPoly(plant_mask, [poly], 255)
-
-        # Step 1: Subtract plant from pot
-        refined_mask = cv2.bitwise_and(pot_mask, cv2.bitwise_not(plant_mask))
-
-        # Step 2: Apply morphological closing to fill small holes created by subtraction
-        refined_mask = cv2.morphologyEx(refined_mask, cv2.MORPH_CLOSE, close_kernel)
-
-        # Step 3: Apply morphological opening to remove noise/artifacts
-        refined_mask = cv2.morphologyEx(refined_mask, cv2.MORPH_OPEN, open_kernel)
-
-        # Determine new largest contour for pot
-        if np.sum(refined_mask) > 0:
-            contours, _ = cv2.findContours(
-                refined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-            )
-            if contours:
-                largest = max(contours, key=cv2.contourArea)
-
-                # Check if the refined area is too small compared to original (excessive subtraction)
-                original_area = cv2.contourArea(
-                    np.array(pot["contour"], dtype=np.int32)
-                )
-                if original_area > 0 and cv2.contourArea(largest) < 0.1 * original_area:
-                    continue
-
-                # Use convex hull to maintain pot-like shape and avoid artifacts
-                hull = cv2.convexHull(largest)
-
-                # Update pot info if hull is valid and has enough points/area
-                if len(hull) >= 4 and cv2.contourArea(hull) > 100:
-                    pot["contour"] = hull.reshape(-1, 2).tolist()
-                    x, y, wb, hb = cv2.boundingRect(hull)
-                    pot["box"] = [float(x), float(y), float(x + wb), float(y + hb)]
-
-
 def process_pipeline_outputs(
     image_np,
     plant_masks,
@@ -601,16 +516,15 @@ def process_pipeline_outputs(
             pot_masks.append(m_new)
 
     if sam3_session_id is not None:
-        state["pot_state"] = wrap_state(sam3_session_id, updated_id_map)
+        state["pot_state"] = wrap_state(
+            sam3_session_id, updated_id_map, pot_masks=pot_masks_raw
+        )
 
     # 2. Refine plant masks
     plant_masks, associations = refine_plant_masks(image_np, plant_masks, pot_masks)
 
     # 2.5 Filter plant masks to only include associated ones (ensures 1-to-1 matching in response)
     plant_masks = [p for p in plant_masks if str(p["object_id"]) in associations]
-
-    # 3. Refine pot masks by subtracting plant masks
-    refine_pot_masks_with_plants(pot_masks, plant_masks, associations, image_np.shape)
 
     # 4. Final ordering and results
     ordered_pot_masks = order_masks_row_major(pot_masks)
