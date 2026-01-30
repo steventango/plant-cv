@@ -139,9 +139,12 @@ def visualize_pipeline_tracking(
                         if pot_stat and "clean_area" in pot_stat:
                             area = pot_stat["clean_area"]
                             current_area = pot_stat.get("area", 0)
-                            area_text = (
-                                f"{'*' if current_area != area else ''}{area:.0f}"
-                            )
+                            if area is not None:
+                                area_text = (
+                                    f"{'*' if current_area != area else ''}{area:.0f}"
+                                )
+                            else:
+                                area_text = "N/A"
                     labels.append(area_text)
                 else:
                     # Fallback to a high ID to avoid overlap with pot IDs if possible
