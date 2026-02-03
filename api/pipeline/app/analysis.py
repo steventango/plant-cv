@@ -66,7 +66,8 @@ def apply_tukey_outlier_detection_frame(plant_stats_list):
         for stats in plant_stats_list:
             if stats:
                 stats["tukey_outlier"] = False
-                stats["area_after_tukey"] = stats.get("area", 0.0)
+                # If area is None, area_after_tukey should be None
+                stats["area_after_tukey"] = stats.get("area")
         return plant_stats_list
 
     # Compute quartiles
@@ -82,7 +83,7 @@ def apply_tukey_outlier_detection_frame(plant_stats_list):
 
         area = stats.get("area")
         is_outlier = False
-        area_after = 0.0
+        area_after = None
 
         if area is not None:
             if area > upper_fence:
