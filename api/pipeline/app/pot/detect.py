@@ -36,7 +36,7 @@ def filter_by_areas(
         iqr = q3 - q1
         median_area = float(np.median(stats_areas))
     else:
-        q1, q3, median_area = 0, 0, 0
+        q1, q3, iqr, median_area = 0, 0, 0, 0
 
     # Upper threshold (remove large outliers)
     tukey_hi = q3 + 1.5 * iqr
@@ -122,6 +122,28 @@ def filter_clipped_pots(boxes, areas, image_shape, margin=1, area_threshold=0.72
     return keep_mask
 
 
+def filter_by_aspect_ratio(boxes, min_ratio=0.5, max_ratio=2.0):
+    """
+    Remove boxes that have an unusual aspect ratio.
+    Pots should be roughly square or slightly rectangular.
+    """
+    widths = boxes[:, 2] - boxes[:, 0]
+    heights = boxes[:, 3] - boxes[:, 1]
+
+    # Avoid division by zero
+    heights = np.maximum(heights, 1e-6)
+    aspect_ratios = widths / heights
+
+    keep_mask = (aspect_ratios >= min_ratio) & (aspect_ratios <= max_ratio)
+
+    if np.sum(~keep_mask) > 0:
+        logger.debug(
+            f"Aspect Ratio Filter dropped {np.sum(~keep_mask)} boxes. Ratios: {aspect_ratios[~keep_mask]}"
+        )
+
+    return keep_mask
+
+
 def filter_pot_masks(masks, image_np):
     """
     Apply shared filtering logic to pot masks.
@@ -162,6 +184,16 @@ def filter_pot_masks(masks, image_np):
     if len(boxes) == 0:
         return []
 
+    # 4. Aspect ratio filter
+    ratio_mask = filter_by_aspect_ratio(boxes)
+    logger.info(f"Aspect Ratio Filter: kept {np.sum(ratio_mask)}/{len(boxes)}")
+    boxes = boxes[ratio_mask]
+    confidences = confidences[ratio_mask]
+    masks_np = masks_np[ratio_mask]
+
+    if len(boxes) == 0:
+        return []
+
     logger.debug(f"filter_pot_masks: finished with {len(masks_np)} masks")
     return masks_np.tolist()
 
@@ -192,12 +224,12 @@ def detect_pots_sam3(image, state=None, extra_prompts=None, **kwargs):
         image_np = np.array(image)
 
     if "score_threshold_detection" not in kwargs:
-        kwargs["score_threshold_detection"] = 0.3
+        kwargs["score_threshold_detection"] = 0.15
 
     # Determine endpoint based on whether we have previous state
     if state is None:
         result = call_sam3_api(
-            image, endpoint="detect", text_prompt="plant pot", **kwargs
+            image, endpoint="detect", text_prompt="soil plant pot", **kwargs
         )
     else:
         result = call_sam3_api(image, endpoint="propagate", state=state, **kwargs)

@@ -24,7 +24,7 @@ def reference_images():
     all_images = sorted(list(REFERENCE_IMAGES_DIR.glob("*.jpg")))
     problem_images = []
     if problem_images:
-        images = [img for img in all_images if img.name not in problem_images]
+        images = [img for img in all_images if img.name in problem_images]
     else:
         images = all_images
     return images
