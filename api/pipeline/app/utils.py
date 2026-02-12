@@ -260,6 +260,52 @@ def associate_plants_to_pots(plant_masks, pot_masks, greedy=True):
     return associations
 
 
+def refine_pot_masks_with_plants(pot_masks, plant_masks, associations, image_shape):
+    """
+    Refine pot masks by subtracting plant masks (rim/soil view).
+    """
+    h, w = image_shape[:2]
+    # Map pot_id -> plant_masks list
+    pot_to_plants = {}
+    for p_id_str, pot_id in associations.items():
+        if pot_id not in pot_to_plants:
+            pot_to_plants[pot_id] = []
+        plant_mask_obj = next(
+            (pm for pm in plant_masks if str(pm["object_id"]) == p_id_str), None
+        )
+        if plant_mask_obj:
+            pot_to_plants[pot_id].append(plant_mask_obj)
+
+    for pot in pot_masks:
+        pot_id = pot["object_id"]
+        plants = pot_to_plants.get(pot_id, [])
+
+        if not plants:
+            continue
+
+        # Build full pot mask
+        pot_mask = np.zeros((h, w), dtype=np.uint8)
+        if "contour" in pot:
+            cv2.fillPoly(pot_mask, [np.array(pot["contour"], dtype=np.int32)], 1)
+
+        # Build combined plant mask for this pot
+        plant_mask_combined = np.zeros((h, w), dtype=np.uint8)
+        for p in plants:
+            if "contours" in p:
+                for c in p["contours"]:
+                    cv2.fillPoly(plant_mask_combined, [np.array(c, dtype=np.int32)], 1)
+            elif "contour" in p:
+                cv2.fillPoly(
+                    plant_mask_combined, [np.array(p["contour"], dtype=np.int32)], 1
+                )
+
+        # Refine pot mask by subtracting plant mask (rim/soil view)
+        # Note: We don't overwrite the main contour here because SAM3 needs the full pot.
+        # This function can be extended if we need refined masks for soil analysis.
+
+    return pot_masks
+
+
 def wrap_state(sam3_state, id_map, pot_masks=None):
     """Wrap SAM3 state, ID map, and pot masks into a single base64 string."""
     data = {"sam3_state": sam3_state, "id_map": id_map, "pot_masks": pot_masks}
@@ -353,18 +399,31 @@ def refine_plant_masks(image_np, plant_masks, pot_masks):
 def apply_id_mapping(masks, id_map):
     """Apply ID mapping to masks. Assign new IDs if not present."""
     remapped_masks = []
-    # Find next available ID for new objects
-    next_id = max(id_map.values()) + 1 if id_map else 1
+
+    # Calculate next_id from all values currently in use
+    all_assigned_ids = list(id_map.values())
+    for m in masks:
+        if isinstance(m.get("object_id"), int):
+            all_assigned_ids.append(m["object_id"])
+
+    next_id = max(all_assigned_ids) + 1 if all_assigned_ids else 0
 
     for m in masks:
-        old_id = str(m["object_id"])
-        if old_id not in id_map:
-            id_map[old_id] = next_id
+        old_id = m.get("object_id")
+
+        # If already a stable ID (integer), keep it as is
+        if isinstance(old_id, int):
+            remapped_masks.append(m.copy())
+            continue
+
+        old_id_str = str(old_id)
+        if old_id_str not in id_map:
+            id_map[old_id_str] = next_id
             next_id += 1
 
         # Create a copy and update ID
         m_new = m.copy()
-        m_new["object_id"] = id_map[old_id]
+        m_new["object_id"] = id_map[old_id_str]
         remapped_masks.append(m_new)
 
     return remapped_masks, id_map
@@ -517,11 +576,14 @@ def process_pipeline_outputs(
 
     if sam3_session_id is not None:
         state["pot_state"] = wrap_state(
-            sam3_session_id, updated_id_map, pot_masks=pot_masks_raw
+            sam3_session_id, updated_id_map, pot_masks=pot_masks
         )
 
     # 2. Refine plant masks
     plant_masks, associations = refine_plant_masks(image_np, plant_masks, pot_masks)
+
+    # 3. Refine pot masks and check for outgrowth
+    refine_pot_masks_with_plants(pot_masks, plant_masks, associations, image_np.shape)
 
     # 2.5 Filter plant masks to only include associated ones (ensures 1-to-1 matching in response)
     plant_masks = [p for p in plant_masks if str(p["object_id"]) in associations]
