@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import supervision as sv
+from app.cv_utils import safe_fill_poly
 from app.pot.quad import mask_to_quadrilateral
 
 
@@ -62,7 +63,7 @@ def visualize_pipeline_tracking(
                 mask = np.zeros((h_new, w_new), dtype=np.uint8)
 
                 scaled_poly = scale_contour(contour_array)
-                cv2.fillPoly(mask, [scaled_poly], 1)
+                safe_fill_poly(mask, scaled_poly, 1)
 
                 try:
                     quad = mask_to_quadrilateral(mask)  # (4, 2)
@@ -110,12 +111,12 @@ def visualize_pipeline_tracking(
                             poly_scaled = (poly * scale).astype(np.int32)
                             polys.append(poly_scaled)
                     if polys:
-                        cv2.fillPoly(mask, polys, 1)
+                        safe_fill_poly(mask, polys, 1)
                 elif "contour" in p:
                     poly = np.array(p["contour"], dtype=np.float32)
                     if poly.ndim == 2 and poly.shape[0] > 0:
                         poly_scaled = (poly * scale).astype(np.int32)
-                        cv2.fillPoly(mask, [poly_scaled], 1)
+                        safe_fill_poly(mask, poly_scaled, 1)
             except Exception:
                 pass
 

@@ -20,6 +20,8 @@ from app.analysis import (
     update_plant_cleaning_state,
 )
 
+from app.cv_utils import safe_fill_poly
+
 logger = logging.getLogger(__name__)
 
 
@@ -286,18 +288,15 @@ def refine_pot_masks_with_plants(pot_masks, plant_masks, associations, image_sha
         # Build full pot mask
         pot_mask = np.zeros((h, w), dtype=np.uint8)
         if "contour" in pot:
-            cv2.fillPoly(pot_mask, [np.array(pot["contour"], dtype=np.int32)], 1)
+            safe_fill_poly(pot_mask, pot["contour"], 1)
 
         # Build combined plant mask for this pot
         plant_mask_combined = np.zeros((h, w), dtype=np.uint8)
         for p in plants:
             if "contours" in p:
-                for c in p["contours"]:
-                    cv2.fillPoly(plant_mask_combined, [np.array(c, dtype=np.int32)], 1)
+                safe_fill_poly(plant_mask_combined, p["contours"], 1)
             elif "contour" in p:
-                cv2.fillPoly(
-                    plant_mask_combined, [np.array(p["contour"], dtype=np.int32)], 1
-                )
+                safe_fill_poly(plant_mask_combined, p["contour"], 1)
 
         # Refine pot mask by subtracting plant mask (rim/soil view)
         # Note: We don't overwrite the main contour here because SAM3 needs the full pot.
@@ -362,9 +361,7 @@ def refine_plant_masks(image_np, plant_masks, pot_masks):
 
         if "contour" in p and p["contour"]:
             m = np.zeros((h, w), dtype=np.uint8)
-            pts = np.array(p["contour"], dtype=np.int32)
-            if pts.size > 0:
-                cv2.fillPoly(m, [pts], 1)
+            safe_fill_poly(m, p["contour"], 1)
 
             orig_area = np.sum(m)
             refined_m = refine_mask_with_otsu(m, preprocessed_gray)
@@ -469,9 +466,9 @@ def process_pot_stats(image_np, pot_masks, plant_masks, associations):
             plant_info = task["plant_info"]
 
             # Pot Quad
-            pot_contour = np.array(pot["contour"], dtype=np.int32)
             pot_mask_single = np.zeros((h, w), dtype=np.uint8)
-            cv2.fillPoly(pot_mask_single, [pot_contour], 1)
+            if "contour" in pot:
+                safe_fill_poly(pot_mask_single, pot["contour"], 1)
             quad = mask_to_quadrilateral(pot_mask_single)
 
             # Warp Pot Image
@@ -480,14 +477,13 @@ def process_pot_stats(image_np, pot_masks, plant_masks, associations):
 
             # Warp Plant Mask
             p_contours = plant_info.get("contours")
+            plant_mask_single = np.zeros((h, w), dtype=np.uint8)
             if p_contours:
-                plant_mask_single = np.zeros((h, w), dtype=np.uint8)
-                for c in p_contours:
-                    cv2.fillPoly(plant_mask_single, [np.array(c, dtype=np.int32)], 255)
+                safe_fill_poly(plant_mask_single, p_contours, 255)
             else:
-                plant_contour = np.array(plant_info["contour"], dtype=np.int32)
-                plant_mask_single = np.zeros((h, w), dtype=np.uint8)
-                cv2.fillPoly(plant_mask_single, [plant_contour], 255)
+                plant_contour = plant_info.get("contour")
+                if plant_contour:
+                    safe_fill_poly(plant_mask_single, plant_contour, 255)
 
             warped_plant_mask = cv2.warpPerspective(
                 plant_mask_single,

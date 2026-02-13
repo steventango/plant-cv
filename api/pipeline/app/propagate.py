@@ -3,7 +3,6 @@ import logging
 import numpy as np
 from flask import Blueprint, jsonify, request
 
-import cv2
 from app.pot.detect import filter_pot_masks
 from app.utils import (
     associate_plants_to_pots,
@@ -12,6 +11,7 @@ from app.utils import (
     process_pipeline_outputs,
     unwrap_state,
 )
+from app.cv_utils import safe_fill_poly
 
 logger = logging.getLogger(__name__)
 
@@ -132,19 +132,11 @@ def propagate():
                         # Create binary masks for comparison
                         p_mask = np.zeros((h, w), dtype=np.uint8)
                         if "contour" in plant_mask_obj:
-                            cv2.fillPoly(
-                                p_mask,
-                                [np.array(plant_mask_obj["contour"], dtype=np.int32)],
-                                1,
-                            )
+                            safe_fill_poly(p_mask, plant_mask_obj["contour"], 1)
 
                         pot_mask_old = np.zeros((h, w), dtype=np.uint8)
                         if "contour" in pot_mask_old_obj:
-                            cv2.fillPoly(
-                                pot_mask_old,
-                                [np.array(pot_mask_old_obj["contour"], dtype=np.int32)],
-                                1,
-                            )
+                            safe_fill_poly(pot_mask_old, pot_mask_old_obj["contour"], 1)
 
                         # Check if plant (t) is contained in pot (t-1)
                         outside_pixels = np.sum((p_mask > 0) & (pot_mask_old == 0))
