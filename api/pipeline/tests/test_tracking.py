@@ -58,15 +58,17 @@ class TestPipelineTracking:
                 "Pipeline service not available. Run: docker compose up -d pipeline"
             )
 
-    @pytest.fixture
-    def video_frames(self):
+    def get_video_frames(self, dataset):
         """Get video frames for testing from local test_data."""
-        if not TRACKING_FRAMES_DIR.exists():
-            pytest.skip(f"Tracking frames directory not found: {TRACKING_FRAMES_DIR}")
+        dataset_dir = TRACKING_FRAMES_DIR / dataset
+        if not dataset_dir.exists():
+            pytest.skip(f"Tracking frames directory not found: {dataset_dir}")
 
-        frames = sorted(TRACKING_FRAMES_DIR.glob("*.jpg"))
+        frames = sorted(dataset_dir.glob("*.jpg"))
         if len(frames) < 2:
-            pytest.skip("Not enough video frames available for tracking test")
+            pytest.skip(
+                f"Not enough video frames available for tracking test in {dataset}"
+            )
 
         # Return list of (path_str, timestamp_str) tuples
         result = []
@@ -79,11 +81,14 @@ class TestPipelineTracking:
             result.append((str(f), ts_part))
         return result
 
-    def test_tracking_with_visualization(self, video_frames):
+    @pytest.mark.parametrize("dataset", ["E14Z1", "E15Z6"])
+    def test_tracking_with_visualization(self, dataset):
         """
         Test tracking using the Pipeline API and save visualization.
         """
-        TEST_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        video_frames = self.get_video_frames(dataset)
+        output_dir = TEST_OUTPUT_DIR / dataset
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         # Process frames
         state_obj = None
@@ -160,7 +165,7 @@ class TestPipelineTracking:
                         if w_b64:
                             import base64 as b64
 
-                            warped_dir = TEST_OUTPUT_DIR / "warped_pots"
+                            warped_dir = output_dir / "warped_pots"
                             warped_dir.mkdir(parents=True, exist_ok=True)
                             img_data = b64.b64decode(w_b64)
                             with open(
@@ -235,13 +240,11 @@ class TestPipelineTracking:
                 f"Frame {j}: visualization_data missing from response"
             )
             viz_bytes = base64.b64decode(viz_data)
-            viz_path = TEST_OUTPUT_DIR / f"viz_pipeline_{j:03d}.jpg"
+            viz_path = output_dir / f"viz_pipeline_{j:03d}.jpg"
             with open(viz_path, "wb") as f:
                 f.write(viz_bytes)
 
-        print(
-            f"\nTracking visualizations with associations saved to: {TEST_OUTPUT_DIR}"
-        )
+        print(f"\nTracking visualizations with associations saved to: {output_dir}")
 
         # Basic assertion to ensure we got some masks and associations
         assert pot_state is not None
