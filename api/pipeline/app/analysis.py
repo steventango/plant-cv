@@ -5,7 +5,7 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 TUKEY_K_UPPER = 4.0
-CLEAN_AREA_LOWER_THRESHOLD = 0.1
+CLEAN_AREA_LOWER_THRESHOLD = 0.3  # 30% — matches biological turgor ceiling
 CLEAN_AREA_UPPER_THRESHOLD = 1.5
 MINIMUM_AREA_COUNT = 1
 EWM_BETA = 0.1
