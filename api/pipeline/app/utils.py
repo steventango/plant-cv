@@ -604,21 +604,17 @@ def process_pipeline_outputs(
 
     new_cleaning_state = {}
 
-    # Key cleaning state by stable pot_id (pots are id-mapped to fixed ids at
-    # initial detect; they persist across SAM3 plant re-detections).
-    # Previously this used SAM3 plant_id, which gets reissued whenever a
-    # plant is briefly lost and re-tracked — wiping EWM history and
-    # bypassing the per-plant outlier check on the next frame.
+    # Key cleaning state by stable pot_id so EWM history survives SAM3
+    # plant_id reissues when a plant is briefly lost and re-tracked.
     pid_to_stats = {}
     for s in valid_stats_list:
         pot_id = s.get("pot_id")
         if pot_id is not None:
             pid_to_stats[str(pot_id)] = s
 
-    # Reverse association: pot_id -> SAM3 plant_id, for plant-mask lookup.
     pot_to_plant_id = {str(pot): str(plant) for plant, pot in associations.items()}
+    mask_by_object_id = {str(m.get("object_id")): m for m in plant_masks}
 
-    # Identify all pot IDs to process (current + stored)
     all_pids = set(pid_to_stats.keys()).union(cleaning_state.keys())
     logger.info(
         f"DEBUG: Processing pot ids: {all_pids} (cleaning keys: {list(cleaning_state.keys())})"
@@ -629,10 +625,7 @@ def process_pipeline_outputs(
         current_state = cleaning_state.get(p_id)
 
         sam3_plant_id = pot_to_plant_id.get(p_id)
-        p_mask_obj = next(
-            (m for m in plant_masks if str(m.get("object_id")) == sam3_plant_id),
-            None,
-        ) if sam3_plant_id else None
+        p_mask_obj = mask_by_object_id.get(sam3_plant_id) if sam3_plant_id else None
         updated_state, clean_values, clean_mask = update_plant_cleaning_state(
             s, current_state, p_mask_obj
         )
@@ -648,7 +641,6 @@ def process_pipeline_outputs(
                 p_mask_obj.update(clean_mask)
 
         elif clean_values.get("is_missing"):
-            # p_id is the pot_id directly now.
             try:
                 last_pot_id = int(p_id)
             except (TypeError, ValueError):
