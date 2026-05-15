@@ -604,26 +604,35 @@ def process_pipeline_outputs(
 
     new_cleaning_state = {}
 
-    # Map plant_id -> stats
+    # Key cleaning state by stable pot_id (pots are id-mapped to fixed ids at
+    # initial detect; they persist across SAM3 plant re-detections).
+    # Previously this used SAM3 plant_id, which gets reissued whenever a
+    # plant is briefly lost and re-tracked — wiping EWM history and
+    # bypassing the per-plant outlier check on the next frame.
     pid_to_stats = {}
     for s in valid_stats_list:
-        pid = str(s.get("plant_id"))
-        if pid:
-            pid_to_stats[pid] = s
+        pot_id = s.get("pot_id")
+        if pot_id is not None:
+            pid_to_stats[str(pot_id)] = s
 
-    # Identify all plant IDs to process (current + stored)
+    # Reverse association: pot_id -> SAM3 plant_id, for plant-mask lookup.
+    pot_to_plant_id = {str(pot): str(plant) for plant, pot in associations.items()}
+
+    # Identify all pot IDs to process (current + stored)
     all_pids = set(pid_to_stats.keys()).union(cleaning_state.keys())
     logger.info(
-        f"DEBUG: Processing pids: {all_pids} (cleaning keys: {list(cleaning_state.keys())})"
+        f"DEBUG: Processing pot ids: {all_pids} (cleaning keys: {list(cleaning_state.keys())})"
     )
 
     for p_id in all_pids:
         s = pid_to_stats.get(p_id)
         current_state = cleaning_state.get(p_id)
 
+        sam3_plant_id = pot_to_plant_id.get(p_id)
         p_mask_obj = next(
-            (m for m in plant_masks if str(m.get("object_id")) == p_id), None
-        )
+            (m for m in plant_masks if str(m.get("object_id")) == sam3_plant_id),
+            None,
+        ) if sam3_plant_id else None
         updated_state, clean_values, clean_mask = update_plant_cleaning_state(
             s, current_state, p_mask_obj
         )
@@ -639,15 +648,19 @@ def process_pipeline_outputs(
                 p_mask_obj.update(clean_mask)
 
         elif clean_values.get("is_missing"):
-            last_pot_id = updated_state.get("last_pot_id")
+            # p_id is the pot_id directly now.
+            try:
+                last_pot_id = int(p_id)
+            except (TypeError, ValueError):
+                last_pot_id = updated_state.get("last_pot_id")
             prev_mask = updated_state.get("prev_clean_mask")
             logger.info(
-                f"DEBUG: Plant {p_id} missing. Last pot: {last_pot_id}, Has mask: {prev_mask is not None}"
+                f"DEBUG: Pot {p_id} missing this frame. Has mask: {prev_mask is not None}"
             )
 
             if last_pot_id is not None:
                 full_stats = {
-                    "plant_id": int(p_id),
+                    "plant_id": sam3_plant_id,
                     "pot_id": last_pot_id,
                     "area": None,
                     **clean_values,
@@ -659,8 +672,8 @@ def process_pipeline_outputs(
 
                 if prev_mask:
                     plant_masks.append(prev_mask)
-                    if last_pot_id is not None:
-                        associations[str(p_id)] = last_pot_id
+                    if sam3_plant_id is not None:
+                        associations[sam3_plant_id] = last_pot_id
 
     final_cleaning_state = cleaning_state.copy()
     final_cleaning_state.update(new_cleaning_state)
