@@ -5,6 +5,7 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 TUKEY_K_UPPER = 4.0
+MAD_K_UPPER = 4.0          # robust frame-level fence: median + K * 1.4826 * MAD
 CLEAN_AREA_LOWER_THRESHOLD = 0.3  # 30% — matches biological turgor ceiling
 CLEAN_AREA_UPPER_THRESHOLD = 1.5
 MINIMUM_AREA_COUNT = 1
@@ -70,11 +71,18 @@ def apply_tukey_outlier_detection_frame(plant_stats_list):
                 stats["area_after_tukey"] = stats.get("area")
         return plant_stats_list
 
-    # Compute quartiles
-    q1 = np.percentile(areas, 25)
-    q3 = np.percentile(areas, 75)
-    iqr = q3 - q1
-    upper_fence = q3 + TUKEY_K_UPPER * iqr
+    # MAD-based fence — robust to >25% contamination (segmentation glitches
+    # frequently hit many plants in the same frame, which breaks IQR's q3).
+    areas_arr = np.asarray(areas, dtype=float)
+    median = float(np.median(areas_arr))
+    mad = float(np.median(np.abs(areas_arr - median)))
+    if mad == 0:
+        # Fall back to Tukey-style IQR fence when MAD collapses
+        q1 = float(np.percentile(areas_arr, 25))
+        q3 = float(np.percentile(areas_arr, 75))
+        upper_fence = q3 + TUKEY_K_UPPER * (q3 - q1)
+    else:
+        upper_fence = median + MAD_K_UPPER * 1.4826 * mad
 
     # Apply fences
     for i, stats in enumerate(plant_stats_list):
