@@ -126,7 +126,8 @@ def _color_means_for_masked_region(
     mapping so these stats mean the same thing they always have — i.e. plantcv's
     ``red_frequencies`` channel is array channel 2, ``blue_frequencies`` is array
     channel 0, and LAB/HSV are computed on the BGR-interpreted array. Scales also
-    follow plantcv: L→0-100, a*/b*→-128..127, hue→degrees, RGB/S/V→0-255.
+    follow plantcv's observation labels: RGB→0-255, L/S/V→0-100 (percent_values),
+    a*/b*→-128..127 (diverging_values), hue→degrees.
     """
     idx = mask > 0
     if not np.any(idx):
@@ -157,8 +158,10 @@ def _color_means_for_masked_region(
 
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     hue = hsv[..., 0][sel].astype(np.float32)
-    saturation = hsv[..., 1][sel].astype(np.float32)
-    value = hsv[..., 2][sel].astype(np.float32)
+    # plantcv labels saturation and value with percent_values (0-100), exactly
+    # as it does lightness, so rescale both from the encoded 0-255 range.
+    saturation = hsv[..., 1][sel].astype(np.float32) * 100.0 / 255.0
+    value = hsv[..., 2][sel].astype(np.float32) * 100.0 / 255.0
 
     hue_circular_mean, hue_circular_std = _circular_hue_mean_and_std(hue)
 
@@ -168,7 +171,9 @@ def _color_means_for_masked_region(
         "blue_frequencies_mean": float(blue.mean()),
         "green-magenta_frequencies_mean": float(green_magenta.mean()),
         "blue-yellow_frequencies_mean": float(blue_yellow.mean()),
-        "hue_frequencies_mean": float((hue * 2.0).mean()),
+        # plantcv labels hue bin i with the interval midpoint i*2+1 (degrees),
+        # so the label-weighted mean is 2*mean(hue) + 1.
+        "hue_frequencies_mean": float((hue * 2.0 + 1.0).mean()),
         "hue_circular_mean": hue_circular_mean,
         "hue_circular_std": hue_circular_std,
         "saturation_frequencies_mean": float(saturation.mean()),
