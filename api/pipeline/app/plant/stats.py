@@ -118,48 +118,36 @@ def _circular_hue_mean_and_std(hue: np.ndarray) -> tuple[float, float]:
 def _color_means_for_masked_region(
     warped_image_np: np.ndarray, mask: np.ndarray
 ) -> dict:
-    """Mean colour stats over the masked region, matching plantcv.analyze.color.
+    """Mean colour stats over the masked region (RGB input).
 
-    plantcv treats the input array as BGR: it splits the channels as ``b, g, r``
-    and converts with ``COLOR_BGR2LAB`` / ``COLOR_BGR2HSV``. The pipeline feeds
-    RGB images, so we replicate that exact (BGR-interpreting) derivation and key
-    mapping so these stats mean the same thing they always have — i.e. plantcv's
-    ``red_frequencies`` channel is array channel 2, ``blue_frequencies`` is array
-    channel 0, and LAB/HSV are computed on the BGR-interpreted array. Scales also
-    follow plantcv's observation labels: RGB→0-255, L/S/V→0-100 (percent_values),
-    a*/b*→-128..127 (diverging_values), hue→degrees.
+    Scales follow plantcv's observation labels: RGB→0-255, L/S/V→0-100,
+    a*/b*→-128..127, hue→degrees (bin midpoint i*2+1).
     """
     idx = mask > 0
     if not np.any(idx):
         means = {k: 0.0 for k in _COLOR_MEAN_KEYS}
-        # plantcv reports NaN hue circular stats when there are no hue>0 pixels.
         means["hue_circular_mean"] = float("nan")
         means["hue_circular_std"] = float("nan")
         return means
 
-    # Crop to the mask bounding box so the colour-space conversions and the
-    # per-channel reductions only touch the plant region, not the full frame.
+    # Crop to the mask bounding box so conversions only touch the plant region.
     ys, xs = np.nonzero(idx)
     y0, y1 = int(ys.min()), int(ys.max()) + 1
     x0, x1 = int(xs.min()), int(xs.max()) + 1
     img = warped_image_np[y0:y1, x0:x1]
     sel = idx[y0:y1, x0:x1]
 
-    # plantcv labels the split channels b, g, r assuming a BGR array; index first,
-    # then convert only the surviving masked pixels to float.
-    blue = img[..., 0][sel].astype(np.float32)
+    red = img[..., 0][sel].astype(np.float32)
     green = img[..., 1][sel].astype(np.float32)
-    red = img[..., 2][sel].astype(np.float32)
+    blue = img[..., 2][sel].astype(np.float32)
 
-    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
     lightness = lab[..., 0][sel].astype(np.float32) * 100.0 / 255.0
     green_magenta = lab[..., 1][sel].astype(np.float32) - 128.0
     blue_yellow = lab[..., 2][sel].astype(np.float32) - 128.0
 
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
     hue = hsv[..., 0][sel].astype(np.float32)
-    # plantcv labels saturation and value with percent_values (0-100), exactly
-    # as it does lightness, so rescale both from the encoded 0-255 range.
     saturation = hsv[..., 1][sel].astype(np.float32) * 100.0 / 255.0
     value = hsv[..., 2][sel].astype(np.float32) * 100.0 / 255.0
 
@@ -171,8 +159,6 @@ def _color_means_for_masked_region(
         "blue_frequencies_mean": float(blue.mean()),
         "green-magenta_frequencies_mean": float(green_magenta.mean()),
         "blue-yellow_frequencies_mean": float(blue_yellow.mean()),
-        # plantcv labels hue bin i with the interval midpoint i*2+1 (degrees),
-        # so the label-weighted mean is 2*mean(hue) + 1.
         "hue_frequencies_mean": float((hue * 2.0 + 1.0).mean()),
         "hue_circular_mean": hue_circular_mean,
         "hue_circular_std": hue_circular_std,
