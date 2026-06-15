@@ -3,6 +3,8 @@ import base64
 import io
 import json
 import logging
+import time
+from contextlib import contextmanager
 
 import cv2
 import httpx
@@ -11,18 +13,30 @@ import requests
 from PIL import Image
 from requests.adapters import HTTPAdapter, Retry
 
-from app.plant.stats import analyze_plant_mask
-from app.pot.quad import mask_to_quadrilateral
-from app.pot.visualize import visualize_pipeline_tracking
-from app.pot.warp import warp_quad_to_square
 from app.analysis import (
     apply_tukey_outlier_detection_frame,
     update_plant_cleaning_state,
 )
-
 from app.cv_utils import safe_fill_poly
+from app.plant.stats import analyze_plant_mask
+from app.pot.quad import mask_to_quadrilateral
+from app.pot.visualize import visualize_pipeline_tracking
+from app.pot.warp import warp_quad_to_square
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def timed(timings: dict | None, key: str):
+    """Record elapsed seconds into timings[key]; a no-op when timings is None."""
+    if timings is None:
+        yield
+        return
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        timings[key] = time.perf_counter() - start
 
 
 def encode_image(image: Image.Image | np.ndarray) -> str:
@@ -426,10 +440,15 @@ def apply_id_mapping(masks, id_map):
     return remapped_masks, id_map
 
 
-def process_pot_stats(image_np, pot_masks, plant_masks, associations):
+def process_pot_stats(image_np, pot_masks, plant_masks, associations, profile=None):
     """
     Compute statistics for each plant in its respective pot.
     """
+    timings = None
+    if profile is not None:
+        timings = profile.setdefault("process_pot_stats", {})
+        timings_start = time.perf_counter()
+
     h, w = image_np.shape[:2]
     stats_dict = {}
 
@@ -459,84 +478,94 @@ def process_pot_stats(image_np, pot_masks, plant_masks, associations):
 
     # 1. Generate warped images (synchronously for now as CV2 is fast)
     warped_images_info = []
-    for task in processing_tasks:
-        try:
-            pot_id = task["pot_id"]
-            pot = task["pot"]
-            plant_info = task["plant_info"]
+    with timed(timings, "warp_and_encode"):
+        for task in processing_tasks:
+            try:
+                pot_id = task["pot_id"]
+                pot = task["pot"]
+                plant_info = task["plant_info"]
 
-            # Pot Quad
-            pot_mask_single = np.zeros((h, w), dtype=np.uint8)
-            if "contour" in pot:
-                safe_fill_poly(pot_mask_single, pot["contour"], 1)
-            quad = mask_to_quadrilateral(pot_mask_single)
+                # Pot Quad
+                pot_mask_single = np.zeros((h, w), dtype=np.uint8)
+                if "contour" in pot:
+                    safe_fill_poly(pot_mask_single, pot["contour"], 1)
+                quad = mask_to_quadrilateral(pot_mask_single)
 
-            # Warp Pot Image
-            output_size = 224
-            warped_pot, H = warp_quad_to_square(image_np, quad, output_size=output_size)
+                # Warp Pot Image
+                output_size = 224
+                warped_pot, H = warp_quad_to_square(
+                    image_np, quad, output_size=output_size
+                )
 
-            # Warp Plant Mask
-            p_contours = plant_info.get("contours")
-            plant_mask_single = np.zeros((h, w), dtype=np.uint8)
-            if p_contours:
-                safe_fill_poly(plant_mask_single, p_contours, 255)
-            else:
-                plant_contour = plant_info.get("contour")
-                if plant_contour:
-                    safe_fill_poly(plant_mask_single, plant_contour, 255)
+                # Warp Plant Mask
+                p_contours = plant_info.get("contours")
+                plant_mask_single = np.zeros((h, w), dtype=np.uint8)
+                if p_contours:
+                    safe_fill_poly(plant_mask_single, p_contours, 255)
+                else:
+                    plant_contour = plant_info.get("contour")
+                    if plant_contour:
+                        safe_fill_poly(plant_mask_single, plant_contour, 255)
 
-            warped_plant_mask = cv2.warpPerspective(
-                plant_mask_single,
-                H,
-                (output_size, output_size),
-                flags=cv2.INTER_NEAREST,
-            )
+                warped_plant_mask = cv2.warpPerspective(
+                    plant_mask_single,
+                    H,
+                    (output_size, output_size),
+                    flags=cv2.INTER_NEAREST,
+                )
 
-            # Encode to B64
-            pill_warped = Image.fromarray(warped_pot)
-            buffered = io.BytesIO()
-            pill_warped.save(buffered, format="JPEG")
-            warped_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                # Encode to B64
+                pill_warped = Image.fromarray(warped_pot)
+                buffered = io.BytesIO()
+                pill_warped.save(buffered, format="JPEG")
+                warped_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-            warped_images_info.append(
-                {
-                    "pot_id": pot_id,
-                    "warped_pot": warped_pot,
-                    "warped_plant_mask": warped_plant_mask,
-                    "warped_b64": warped_b64,
-                    "plant_id": plant_info["object_id"],
-                }
-            )
-        except Exception as e:
-            logger.error(f"Error preparing warp for pot {task['pot_id']}: {e}")
-            stats_dict[str(task["pot_id"])] = {"error": str(e)}
+                warped_images_info.append(
+                    {
+                        "pot_id": pot_id,
+                        "warped_pot": warped_pot,
+                        "warped_plant_mask": warped_plant_mask,
+                        "warped_b64": warped_b64,
+                        "plant_id": plant_info["object_id"],
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Error preparing warp for pot {task['pot_id']}: {e}")
+                stats_dict[str(task["pot_id"])] = {"error": str(e)}
 
     # 2. Get embeddings asynchronously
     if warped_images_info:
         warped_b64_list = [info["warped_b64"] for info in warped_images_info]
-        embeddings_results = asyncio.run(async_get_embeddings(warped_b64_list))
+        with timed(timings, "embeddings"):
+            embeddings_results = asyncio.run(async_get_embeddings(warped_b64_list))
 
-        for info, emb_res in zip(warped_images_info, embeddings_results):
-            pot_id = info["pot_id"]
-            try:
-                # 3. Analyze Plant Stats
-                plant_stats, _ = analyze_plant_mask(
-                    info["warped_pot"], info["warped_plant_mask"]
-                )
-                plant_stats["warped_image"] = info["warped_b64"]
+        with timed(timings, "analyze_plant_mask"):
+            for info, emb_res in zip(warped_images_info, embeddings_results):
+                pot_id = info["pot_id"]
+                try:
+                    # 3. Analyze Plant Stats
+                    plant_stats, _ = analyze_plant_mask(
+                        info["warped_pot"],
+                        info["warped_plant_mask"],
+                        profile=profile,
+                    )
+                    plant_stats["warped_image"] = info["warped_b64"]
 
-                # 4. Integrate Embeddings
-                if "cls_token" in emb_res:
-                    plant_stats["cls_token"] = emb_res["cls_token"]
-                elif "error" in emb_res:
-                    plant_stats["cls_token_error"] = emb_res["error"]
+                    # 4. Integrate Embeddings
+                    if "cls_token" in emb_res:
+                        plant_stats["cls_token"] = emb_res["cls_token"]
+                    elif "error" in emb_res:
+                        plant_stats["cls_token_error"] = emb_res["error"]
 
-                plant_stats["plant_id"] = info["plant_id"]
-                plant_stats["pot_id"] = pot_id
-                stats_dict[str(pot_id)] = plant_stats
-            except Exception as e:
-                logger.error(f"Error finalising stats for pot {pot_id}: {e}")
-                stats_dict[str(pot_id)] = {"error": str(e)}
+                    plant_stats["plant_id"] = info["plant_id"]
+                    plant_stats["pot_id"] = pot_id
+                    stats_dict[str(pot_id)] = plant_stats
+                except Exception as e:
+                    logger.error(f"Error finalising stats for pot {pot_id}: {e}")
+                    stats_dict[str(pot_id)] = {"error": str(e)}
+
+    if timings is not None:
+        timings["total"] = time.perf_counter() - timings_start
 
     return stats_dict
 
@@ -548,27 +577,34 @@ def process_pipeline_outputs(
     id_map=None,
     sam3_session_id=None,
     cleaning_state=None,
+    profile=None,
 ):
     """
     Common post-processing for both detect and propagate endpoints.
     """
+    timings = None
+    if profile is not None:
+        timings = profile.setdefault("process_pipeline_outputs", {})
+        timings_start = time.perf_counter()
+
     response = {}
 
     # 1. ID Mapping
     state = {}
-    if id_map is not None:
-        pot_masks, updated_id_map = apply_id_mapping(pot_masks_raw, id_map)
-    else:
-        # Initial detection case: create ID map based on row-major order
-        sorted_pot_masks = order_masks_row_major(pot_masks_raw)
-        updated_id_map = {}
-        pot_masks = []
-        for new_id, m in enumerate(sorted_pot_masks):
-            old_id = str(m["object_id"])
-            updated_id_map[old_id] = new_id
-            m_new = m.copy()
-            m_new["object_id"] = new_id
-            pot_masks.append(m_new)
+    with timed(timings, "id_mapping"):
+        if id_map is not None:
+            pot_masks, updated_id_map = apply_id_mapping(pot_masks_raw, id_map)
+        else:
+            # Initial detection case: create ID map based on row-major order
+            sorted_pot_masks = order_masks_row_major(pot_masks_raw)
+            updated_id_map = {}
+            pot_masks = []
+            for new_id, m in enumerate(sorted_pot_masks):
+                old_id = str(m["object_id"])
+                updated_id_map[old_id] = new_id
+                m_new = m.copy()
+                m_new["object_id"] = new_id
+                pot_masks.append(m_new)
 
     if sam3_session_id is not None:
         state["pot_state"] = wrap_state(
@@ -576,19 +612,24 @@ def process_pipeline_outputs(
         )
 
     # 2. Refine plant masks
-    plant_masks, associations = refine_plant_masks(image_np, plant_masks, pot_masks)
+    with timed(timings, "refine_plant_masks"):
+        plant_masks, associations = refine_plant_masks(image_np, plant_masks, pot_masks)
 
     # 3. Refine pot masks and check for outgrowth
-    refine_pot_masks_with_plants(pot_masks, plant_masks, associations, image_np.shape)
+    with timed(timings, "refine_pot_masks"):
+        refine_pot_masks_with_plants(
+            pot_masks, plant_masks, associations, image_np.shape
+        )
 
     # 2.5 Filter plant masks to only include associated ones (ensures 1-to-1 matching in response)
     plant_masks = [p for p in plant_masks if str(p["object_id"]) in associations]
 
     # 4. Final ordering and results
     ordered_pot_masks = order_masks_row_major(pot_masks)
-    plant_stats = process_pot_stats(
-        image_np, ordered_pot_masks, plant_masks, associations
-    )
+    with timed(timings, "process_pot_stats_total"):
+        plant_stats = process_pot_stats(
+            image_np, ordered_pot_masks, plant_masks, associations, profile=profile
+        )
 
     # 5. Apply Stat Cleaning
     # Collect valid stats for Tukey
@@ -597,6 +638,7 @@ def process_pipeline_outputs(
         if s and "error" not in s:
             valid_stats_list.append(s)
 
+    clean_start = time.perf_counter()
     apply_tukey_outlier_detection_frame(valid_stats_list)
 
     if cleaning_state is None:
@@ -666,6 +708,10 @@ def process_pipeline_outputs(
                     plant_masks.append(prev_mask)
                     if sam3_plant_id is not None:
                         associations[sam3_plant_id] = last_pot_id
+
+    if timings is not None:
+        timings["cleaning"] = time.perf_counter() - clean_start
+        timings["total"] = time.perf_counter() - timings_start
 
     final_cleaning_state = cleaning_state.copy()
     final_cleaning_state.update(new_cleaning_state)

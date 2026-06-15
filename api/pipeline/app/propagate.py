@@ -1,17 +1,19 @@
 import logging
+import time
 
 import numpy as np
 from flask import Blueprint, jsonify, request
 
+from app.cv_utils import safe_fill_poly
 from app.pot.detect import filter_pot_masks
 from app.utils import (
     associate_plants_to_pots,
     call_sam3_api,
     decode_image,
     process_pipeline_outputs,
+    timed,
     unwrap_state,
 )
-from app.cv_utils import safe_fill_poly
 
 logger = logging.getLogger(__name__)
 
@@ -40,19 +42,24 @@ def propagate():
     """
     try:
         data = request.json
+        profile_enabled = bool(data.get("profile"))
+        timings = {} if profile_enabled else None
+        request_start = time.perf_counter()
         state_in = data.get("state", {})
 
         image_data = data["image_data"]
         pot_state = state_in.get("pot_state")
         plant_state = state_in.get("plant_state")
         cleaning_state = state_in.get("cleaning_state")
-        image = decode_image(image_data)
+        with timed(timings, "decode_image"):
+            image = decode_image(image_data)
         image_np = np.array(image)
         h, w = image_np.shape[:2]
 
         response = {}
         plant_masks = []
-        pot_session_id, id_map, p_masks_raw_old = unwrap_state(pot_state)
+        with timed(timings, "unwrap_state"):
+            pot_session_id, id_map, p_masks_raw_old = unwrap_state(pot_state)
 
         if pot_state:
             # Get options from request
@@ -71,13 +78,17 @@ def propagate():
                 ]:
                     pot_params[k] = v
 
-            pot_result = call_sam3_api(
-                image,
-                endpoint="propagate",
-                state=pot_session_id,
-                **pot_params,
-            )
-            p_masks_raw_new = filter_pot_masks(pot_result.get("masks", []), image_np)
+            with timed(timings, "sam3_pot_propagate"):
+                pot_result = call_sam3_api(
+                    image,
+                    endpoint="propagate",
+                    state=pot_session_id,
+                    **pot_params,
+                )
+            with timed(timings, "filter_pot_masks"):
+                p_masks_raw_new = filter_pot_masks(
+                    pot_result.get("masks", []), image_np
+                )
 
             # Mapping new masks back to stable IDs and handling outgrowth
             old_mask_lookup = (
@@ -89,20 +100,21 @@ def propagate():
             plant_session_id = None
             if plant_state:
                 # For the plant SAM3 request, we want to run mask reconditioning every frame
-                plant_result = call_sam3_api(
-                    image,
-                    endpoint="propagate",
-                    state=plant_state,
-                    recondition_on_trk_masks=True,
-                    recondition_every_nth_frame=1,
-                    score_threshold_detection=0.165,
-                    high_conf_thresh=0.165,
-                    high_iou_thresh=0.0001,
-                    new_det_thresh=0.2,
-                    det_nms_thresh=0.01,
-                    assoc_iou_thresh=0.0001,
-                    trk_assoc_iou_thresh=0.0001,
-                )
+                with timed(timings, "sam3_plant_propagate"):
+                    plant_result = call_sam3_api(
+                        image,
+                        endpoint="propagate",
+                        state=plant_state,
+                        recondition_on_trk_masks=True,
+                        recondition_every_nth_frame=1,
+                        score_threshold_detection=0.165,
+                        high_conf_thresh=0.165,
+                        high_iou_thresh=0.0001,
+                        new_det_thresh=0.2,
+                        det_nms_thresh=0.01,
+                        assoc_iou_thresh=0.0001,
+                        trk_assoc_iou_thresh=0.0001,
+                    )
                 plant_masks = plant_result.get("masks", [])
                 plant_session_id = plant_result.get("session_id")
 
@@ -110,6 +122,7 @@ def propagate():
             # We need to temporarily associate current plants with previous pots to check containment
             # Note: process_pipeline_outputs will do the FINAL association for the response
             # p_masks_raw_old has stable IDs, plant_masks has SAM3 IDs
+            outgrowth_start = time.perf_counter()
             newly_outgrown_stable_ids = set()
             if enable_outgrowth_lock:
                 temp_associations = associate_plants_to_pots(
@@ -145,6 +158,8 @@ def propagate():
                             logger.info(
                                 f"Pot {stable_pot_id} detection: Plant at t outgrew Pot at t-1. Outside pixels: {outside_pixels}"
                             )
+            if timings is not None:
+                timings["outgrowth_check"] = time.perf_counter() - outgrowth_start
 
             new_mask_by_stable_id = {}
             for m_new in p_masks_raw_new:
@@ -187,10 +202,14 @@ def propagate():
                 id_map=id_map,
                 sam3_session_id=pot_session_id,
                 cleaning_state=cleaning_state,
+                profile=timings,
             )
             response["state"]["plant_state"] = plant_session_id
             response["debug_plant_mask_sam3_count"] = len(plant_masks)
             response["debug_pot_masks_count"] = len(final_p_masks_raw)
+            if timings is not None:
+                timings["total"] = time.perf_counter() - request_start
+                response["profile"] = timings
 
         return jsonify(response)
     except Exception as e:
