@@ -1,4 +1,5 @@
 import logging
+import time
 
 import numpy as np
 from flask import Blueprint, jsonify, request
@@ -8,6 +9,7 @@ from app.utils import (
     call_sam3_api,
     decode_image,
     process_pipeline_outputs,
+    timed,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,30 +37,37 @@ def detect():
     """
     try:
         data = request.json
+        profile_enabled = bool(data.get("profile"))
+        timings = {} if profile_enabled else None
+        request_start = time.perf_counter()
+
         state_in = data.get("state", {})
         image_data = data["image_data"]
-        image = decode_image(image_data)
+        with timed(timings, "decode_image"):
+            image = decode_image(image_data)
 
         cleaning_state = state_in.get("cleaning_state")
 
-        _, _, _, pot_state_from_sam3, sorted_pot_masks, _ = detect_pots_sam3(image)
+        with timed(timings, "detect_pots_sam3"):
+            _, _, _, pot_state_from_sam3, sorted_pot_masks, _ = detect_pots_sam3(image)
 
         # For the plant SAM3 request, we want to run mask reconditioning every frame
-        plant_result = call_sam3_api(
-            image,
-            endpoint="detect",
-            text_prompt="plant",
-            recondition_on_trk_masks=False,
-            recondition_every_nth_frame=1,
-            score_threshold_detection=0.165,
-            high_conf_thresh=0.3,
-            high_iou_thresh=0.5,
-            new_det_thresh=0.5,
-            det_nms_thresh=0.5,
-            assoc_iou_thresh=0.1,
-            trk_assoc_iou_thresh=0.5,
-            suppress_overlapping_based_on_recent_occlusion_threshold=1.0,
-        )
+        with timed(timings, "sam3_plant_detect"):
+            plant_result = call_sam3_api(
+                image,
+                endpoint="detect",
+                text_prompt="plant",
+                recondition_on_trk_masks=False,
+                recondition_every_nth_frame=1,
+                score_threshold_detection=0.165,
+                high_conf_thresh=0.3,
+                high_iou_thresh=0.5,
+                new_det_thresh=0.5,
+                det_nms_thresh=0.5,
+                assoc_iou_thresh=0.1,
+                trk_assoc_iou_thresh=0.5,
+                suppress_overlapping_based_on_recent_occlusion_threshold=1.0,
+            )
         plant_state_from_sam3 = plant_result["session_id"]
         plant_masks = plant_result.get("masks", [])
 
@@ -69,8 +78,13 @@ def detect():
             sorted_pot_masks,
             sam3_session_id=pot_state_from_sam3,
             cleaning_state=cleaning_state,
+            profile=timings,
         )
+        if timings is not None:
+            timings["total"] = time.perf_counter() - request_start
         response["state"]["plant_state"] = plant_state_from_sam3
+        if timings is not None:
+            response["profile"] = timings
 
         logger.info(
             f"detect: pot_masks={len(response['pot_masks'])}, ordered_pot_ids={len(response['ordered_pot_ids'])}"
