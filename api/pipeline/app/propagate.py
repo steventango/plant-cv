@@ -86,7 +86,9 @@ def propagate():
                     **pot_params,
                 )
             with timed(timings, "filter_pot_masks"):
-                p_masks_raw_new = filter_pot_masks(pot_result.get("masks", []), image_np)
+                p_masks_raw_new = filter_pot_masks(
+                    pot_result.get("masks", []), image_np
+                )
 
             # Mapping new masks back to stable IDs and handling outgrowth
             old_mask_lookup = (
