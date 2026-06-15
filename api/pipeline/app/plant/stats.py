@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import cv2
 import numpy as np
 from plantcv import plantcv as pcv
+from scipy import stats as scipy_stats
 
 logger = logging.getLogger(__name__)
 
@@ -99,63 +100,79 @@ _COLOR_MEAN_KEYS = (
 )
 
 
-def _circular_mean_and_std(degrees: np.ndarray) -> tuple[float, float]:
-    """Circular mean/std (in degrees) of a 1-D array of angles in degrees."""
-    count = degrees.size
-    if count == 0:
-        return 0.0, 0.0
-    radians = np.deg2rad(degrees)
-    sin_sum = float(np.sum(np.sin(radians)))
-    cos_sum = float(np.sum(np.cos(radians)))
-    mean_angle = np.arctan2(sin_sum, cos_sum)
-    if mean_angle < 0:
-        mean_angle += 2 * np.pi
-    R = np.hypot(sin_sum, cos_sum) / count
-    circ_std = np.sqrt(max(0.0, -2.0 * np.log(max(R, 1e-12))))
-    return float(np.rad2deg(mean_angle)), float(np.rad2deg(circ_std))
+def _circular_hue_mean_and_std(hue: np.ndarray) -> tuple[float, float]:
+    """Circular mean/std of OpenCV-encoded hue (0-179), reported in degrees (0-359).
+
+    Mirrors plantcv.analyze.color: hue==0 marks red/undefined-hue (saturated)
+    pixels and is excluded, and an all-zero/empty selection yields NaN (not 0.0),
+    matching scipy.stats.circmean/circstd on an empty array.
+    """
+    nonzero = hue[hue > 0]
+    if nonzero.size == 0:
+        return float("nan"), float("nan")
+    mean = float(scipy_stats.circmean(nonzero, high=179, low=0) * 2)
+    std = float(scipy_stats.circstd(nonzero, high=179, low=0) * 2)
+    return mean, std
 
 
 def _color_means_for_masked_region(
     warped_image_np: np.ndarray, mask: np.ndarray
 ) -> dict:
-    """Mean colour stats over the masked pixels, in plantcv's key/scale conventions."""
+    """Mean colour stats over the masked region, matching plantcv.analyze.color.
+
+    plantcv treats the input array as BGR: it splits the channels as ``b, g, r``
+    and converts with ``COLOR_BGR2LAB`` / ``COLOR_BGR2HSV``. The pipeline feeds
+    RGB images, so we replicate that exact (BGR-interpreting) derivation and key
+    mapping so these stats mean the same thing they always have — i.e. plantcv's
+    ``red_frequencies`` channel is array channel 2, ``blue_frequencies`` is array
+    channel 0, and LAB/HSV are computed on the BGR-interpreted array. Scales also
+    follow plantcv: L→0-100, a*/b*→-128..127, hue→degrees, RGB/S/V→0-255.
+    """
     idx = mask > 0
     if not np.any(idx):
-        return {k: 0.0 for k in _COLOR_MEAN_KEYS}
+        means = {k: 0.0 for k in _COLOR_MEAN_KEYS}
+        # plantcv reports NaN hue circular stats when there are no hue>0 pixels.
+        means["hue_circular_mean"] = float("nan")
+        means["hue_circular_std"] = float("nan")
+        return means
 
     # Crop to the mask bounding box so the colour-space conversions and the
     # per-channel reductions only touch the plant region, not the full frame.
     ys, xs = np.nonzero(idx)
     y0, y1 = int(ys.min()), int(ys.max()) + 1
     x0, x1 = int(xs.min()), int(xs.max()) + 1
-    rgb = warped_image_np[y0:y1, x0:x1]
+    img = warped_image_np[y0:y1, x0:x1]
     sel = idx[y0:y1, x0:x1]
 
-    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
-    lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
+    # plantcv labels the split channels b, g, r assuming a BGR array; index first,
+    # then convert only the surviving masked pixels to float.
+    blue = img[..., 0][sel].astype(np.float32)
+    green = img[..., 1][sel].astype(np.float32)
+    red = img[..., 2][sel].astype(np.float32)
 
-    # Reduce each channel to just the masked pixels before averaging.
-    r = rgb[..., 0].astype(np.float32)[sel]
-    g = rgb[..., 1].astype(np.float32)[sel]
-    b = rgb[..., 2].astype(np.float32)[sel]
-    h = hsv[..., 0].astype(np.float32)[sel] * 2.0
-    s = hsv[..., 1].astype(np.float32)[sel]
-    v = hsv[..., 2].astype(np.float32)[sel]
-    lightness = lab[..., 0].astype(np.float32)[sel] * 100.0 / 255.0
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    lightness = lab[..., 0][sel].astype(np.float32) * 100.0 / 255.0
+    green_magenta = lab[..., 1][sel].astype(np.float32) - 128.0
+    blue_yellow = lab[..., 2][sel].astype(np.float32) - 128.0
 
-    hue_circular_mean, hue_circular_std = _circular_mean_and_std(h)
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    hue = hsv[..., 0][sel].astype(np.float32)
+    saturation = hsv[..., 1][sel].astype(np.float32)
+    value = hsv[..., 2][sel].astype(np.float32)
+
+    hue_circular_mean, hue_circular_std = _circular_hue_mean_and_std(hue)
 
     return {
-        "red_frequencies_mean": float(r.mean()),
-        "green_frequencies_mean": float(g.mean()),
-        "blue_frequencies_mean": float(b.mean()),
-        "green-magenta_frequencies_mean": float((g - r).mean()),
-        "blue-yellow_frequencies_mean": float((b - (r + g) / 2.0).mean()),
-        "hue_frequencies_mean": float(h.mean()),
+        "red_frequencies_mean": float(red.mean()),
+        "green_frequencies_mean": float(green.mean()),
+        "blue_frequencies_mean": float(blue.mean()),
+        "green-magenta_frequencies_mean": float(green_magenta.mean()),
+        "blue-yellow_frequencies_mean": float(blue_yellow.mean()),
+        "hue_frequencies_mean": float((hue * 2.0).mean()),
         "hue_circular_mean": hue_circular_mean,
         "hue_circular_std": hue_circular_std,
-        "saturation_frequencies_mean": float(s.mean()),
-        "value_frequencies_mean": float(v.mean()),
+        "saturation_frequencies_mean": float(saturation.mean()),
+        "value_frequencies_mean": float(value.mean()),
         "lightness_frequencies_mean": float(lightness.mean()),
     }
 
