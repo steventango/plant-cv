@@ -325,7 +325,7 @@ class SAM3API(ls.LitAPI):
 
             # Clear GPU memory and prune session before inference to limit memory growth
             torch.cuda.empty_cache()
-            prune_session(session)
+            prune_session(session, keep_frames=int(request.get("prune_keep_frames", 2)))
 
             model_outputs = self.model(
                 inference_session=session,
@@ -368,5 +368,5 @@ class SAM3API(ls.LitAPI):
 
 if __name__ == "__main__":
     api = SAM3API()
-    server = ls.LitServer(api)
+    server = ls.LitServer(api, timeout=False)
     server.run(port=8805, num_api_servers=1, generate_client_file=False)
