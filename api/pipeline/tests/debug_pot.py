@@ -114,9 +114,7 @@ def main():
         if pot_obj and pot_obj.get("box"):
             last_box = pot_obj["box"]
 
-        refined = next(
-            (m for m in plant_masks if m.get("object_id") == plant_id), None
-        )
+        refined = next((m for m in plant_masks if m.get("object_id") == plant_id), None)
         raw_obj = next((m for m in raw if m.get("object_id") == plant_id), None)
 
         refined_contour = None
@@ -152,7 +150,9 @@ def main():
 
         # Overlay crop: raw SAM3 (green) vs refined (red)
         if last_box:
-            img = np.array(Image.open(io.BytesIO(base64.b64decode(img_b64))).convert("RGB"))
+            img = np.array(
+                Image.open(io.BytesIO(base64.b64decode(img_b64))).convert("RGB")
+            )
             img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
             cx = (last_box[0] + last_box[2]) / 2
             cy = (last_box[1] + last_box[3]) / 2
@@ -161,10 +161,15 @@ def main():
             x1, y1 = int(cx + half), int(cy + half)
             draw_contour(img, raw_contour, (0, 255, 0))  # green raw
             draw_contour(img, refined_contour, (0, 0, 255), 1)  # red refined
-            crop = img[max(0, y0):y1, max(0, x0):x1]
+            crop = img[max(0, y0) : y1, max(0, x0) : x1]
             cv2.putText(
-                crop, f"f{j} raw={raw_px:.0f} ref={refined_px:.0f}",
-                (5, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1,
+                crop,
+                f"f{j} raw={raw_px:.0f} ref={refined_px:.0f}",
+                (5, 18),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 255),
+                1,
             )
             cv2.imwrite(str(OUT_DIR / f"f{j:02d}_pot{TARGET_POT}.jpg"), crop)
 
