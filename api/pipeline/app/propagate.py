@@ -99,21 +99,26 @@ def propagate():
             plant_masks = []
             plant_session_id = None
             if plant_state:
-                # For the plant SAM3 request, we want to run mask reconditioning every frame
+                plant_params = {
+                    "recondition_on_trk_masks": True,
+                    "recondition_every_nth_frame": 1,
+                    "prune_keep_frames": 8,
+                    "score_threshold_detection": 0.165,
+                    "high_conf_thresh": 0.165,
+                    "high_iou_thresh": 0.0,
+                    "new_det_thresh": 0.2,
+                    "det_nms_thresh": 0.01,
+                    "assoc_iou_thresh": 0.0,
+                    "trk_assoc_iou_thresh": 0.0,
+                }
+                # Allow per-request overrides for debugging/tuning the plant tracker
+                plant_params.update(data.get("plant_params", {}))
                 with timed(timings, "sam3_plant_propagate"):
                     plant_result = call_sam3_api(
                         image,
                         endpoint="propagate",
                         state=plant_state,
-                        recondition_on_trk_masks=True,
-                        recondition_every_nth_frame=1,
-                        score_threshold_detection=0.165,
-                        high_conf_thresh=0.165,
-                        high_iou_thresh=0.0,
-                        new_det_thresh=0.2,
-                        det_nms_thresh=0.01,
-                        assoc_iou_thresh=0.0,
-                        trk_assoc_iou_thresh=0.0,
+                        **plant_params,
                     )
                 plant_masks = plant_result.get("masks", [])
                 plant_session_id = plant_result.get("session_id")
@@ -207,6 +212,17 @@ def propagate():
             response["state"]["plant_state"] = plant_session_id
             response["debug_plant_mask_sam3_count"] = len(plant_masks)
             response["debug_pot_masks_count"] = len(final_p_masks_raw)
+            if data.get("debug_raw_plants"):
+                # Raw SAM3 plant masks (pre-association/refine) for tracking diagnostics
+                response["debug_raw_plant_masks"] = [
+                    {
+                        "object_id": m.get("object_id"),
+                        "box": m.get("box"),
+                        "score": m.get("score"),
+                        "contour": m.get("contour"),
+                    }
+                    for m in plant_masks
+                ]
             if timings is not None:
                 timings["total"] = time.perf_counter() - request_start
                 response["profile"] = timings
