@@ -109,11 +109,11 @@ def propagate():
                         recondition_every_nth_frame=1,
                         score_threshold_detection=0.165,
                         high_conf_thresh=0.165,
-                        high_iou_thresh=0.0001,
+                        high_iou_thresh=0.0,
                         new_det_thresh=0.2,
                         det_nms_thresh=0.01,
-                        assoc_iou_thresh=0.0001,
-                        trk_assoc_iou_thresh=0.0001,
+                        assoc_iou_thresh=0.0,
+                        trk_assoc_iou_thresh=0.0,
                     )
                 plant_masks = plant_result.get("masks", [])
                 plant_session_id = plant_result.get("session_id")
