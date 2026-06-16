@@ -85,6 +85,16 @@ def detect():
         response["state"]["plant_state"] = plant_state_from_sam3
         if timings is not None:
             response["profile"] = timings
+        if data.get("debug_raw_plants"):
+            response["debug_raw_plant_masks"] = [
+                {
+                    "object_id": m.get("object_id"),
+                    "box": m.get("box"),
+                    "score": m.get("score"),
+                    "contour": m.get("contour"),
+                }
+                for m in plant_masks
+            ]
 
         logger.info(
             f"detect: pot_masks={len(response['pot_masks'])}, ordered_pot_ids={len(response['ordered_pot_ids'])}"

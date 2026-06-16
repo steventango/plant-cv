@@ -81,7 +81,7 @@ class TestPipelineTracking:
             result.append((str(f), ts_part))
         return result
 
-    @pytest.mark.parametrize("dataset", ["E14Z1", "E16Z1"])
+    @pytest.mark.parametrize("dataset", ["E14Z1", "E16Z1", "E16Z6", "E18Z2"])
     def test_tracking_with_visualization(self, dataset):
         """
         Test tracking using the Pipeline API and save visualization.
