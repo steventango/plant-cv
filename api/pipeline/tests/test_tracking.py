@@ -148,7 +148,7 @@ class TestPipelineTracking:
                     if stats:
                         area = stats.get("area", 0)
                         print(
-                            f"Sample stats for pot {first_pot_id}: area={area:.2f} mm²"
+                            f"Sample stats for pot {first_pot_id}: area={area:.2f} cm²"
                         )
 
                         # Verify embeddings
@@ -185,7 +185,7 @@ class TestPipelineTracking:
                             p_area = plant_stats[p_id].get("area")
                             if p_area is not None:
                                 print(
-                                    f"DEBUG: Pot {p_id} (Plant {plant_id}) area: {p_area:.0f} mm²"
+                                    f"DEBUG: Pot {p_id} (Plant {plant_id}) area: {p_area:.0f} cm²"
                                 )
                             else:
                                 print(
