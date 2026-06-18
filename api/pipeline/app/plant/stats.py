@@ -32,20 +32,20 @@ def _increment_profile_count(profile: dict | None) -> None:
 
 
 def calculate_scale_factor(
-    image_width: int, pot_size_mm: float = 60.0, margin: float = 0.25
+    image_width: int, pot_size_cm: float = 6.0, margin: float = 0.25
 ) -> float:
     """
-    Calculate the scale factor (pixels per mm) for a warped image.
+    Calculate the scale factor (pixels per cm) for a warped image.
     """
     # Warped image includes margin, so total size = pot_size * (1 + 2*margin)
-    total_size_mm = pot_size_mm * (1.0 + 2.0 * margin)
+    total_size_cm = pot_size_cm * (1.0 + 2.0 * margin)
     # Assume square warped image
-    return image_width / total_size_mm
+    return image_width / total_size_cm
 
 
-def convert_px_to_mm(metrics: dict, scale: float) -> dict:
+def convert_px_to_cm(metrics: dict, scale: float) -> dict:
     """
-    Convert pixel-based measurements to mm.
+    Convert pixel-based measurements to cm.
     """
     area_metrics = ["area", "convex_hull_area"]
     linear_metrics = [
@@ -171,7 +171,7 @@ def _color_means_for_masked_region(
 def analyze_plant_mask(
     warped_image_np: np.ndarray,
     mask_binary: np.ndarray,
-    pot_size_mm: float = 60.0,
+    pot_size_cm: float = 6.0,
     margin: float = 0.25,
     profile: dict | None = None,
 ):
@@ -181,7 +181,7 @@ def analyze_plant_mask(
     Args:
         warped_image_np: Warped pot image as numpy array (RGB)
         mask_binary: Binary plant mask (0 or 255) as numpy array
-        pot_size_mm: Physical size of pot in mm (default: 60mm)
+        pot_size_cm: Physical size of pot in cm (default: 6cm)
         margin: Margin ratio in warped image (default: 0.25 = 25%)
 
     Returns:
@@ -192,9 +192,9 @@ def analyze_plant_mask(
     with _timed_accumulate(profile, "total"):
         _increment_profile_count(profile)
 
-        # Calculate scale factor: pixels per mm
+        # Calculate scale factor: pixels per cm
         image_height, image_width = warped_image_np.shape[:2]
-        scale = calculate_scale_factor(image_width, pot_size_mm, margin)
+        scale = calculate_scale_factor(image_width, pot_size_cm, margin)
 
         labeled_mask = np.where(mask_binary > 0, 1, 0).astype(np.uint8)
         n_pixels = np.sum(labeled_mask)
@@ -267,7 +267,7 @@ def analyze_plant_mask(
 
         stats.update(color_stats)
 
-        with _timed_accumulate(profile, "convert_px_to_mm"):
-            stats = convert_px_to_mm(stats, scale)
+        with _timed_accumulate(profile, "convert_px_to_cm"):
+            stats = convert_px_to_cm(stats, scale)
 
     return stats, analysis_image

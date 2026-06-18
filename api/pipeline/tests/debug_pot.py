@@ -139,7 +139,7 @@ def main():
             "plant_id": plant_id,
             "raw_px_area": raw_px,
             "refined_px_area": refined_px,
-            "reported_area_mm2": reported_area,
+            "reported_area_cm2": reported_area,
             "clean_area": clean_area,
         }
         summary.append(rec)
