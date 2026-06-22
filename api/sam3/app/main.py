@@ -377,5 +377,5 @@ class SAM3API(ls.LitAPI):
 
 if __name__ == "__main__":
     api = SAM3API()
-    server = ls.LitServer(api, workers_per_device=2, timeout=False)
+    server = ls.LitServer(api, timeout=False)
     server.run(port=8805, generate_client_file=False)

@@ -92,6 +92,6 @@ class EmbeddingsAPI(ls.LitAPI):
 if __name__ == "__main__":
     api = EmbeddingsAPI()
     server = ls.LitServer(
-        api, accelerator="gpu", devices=1, workers_per_device=2, timeout=False
+        api, accelerator="gpu", devices=1, timeout=False
     )
     server.run(port=8803, generate_client_file=False)
