@@ -1,6 +1,6 @@
 import io
 import time
-import zlib
+import lz4.frame
 import gc
 import os
 import threading
@@ -56,7 +56,7 @@ def serialize_state(inference_session: Sam3VideoInferenceSession) -> bytes:
     raw_bytes = buffer.getvalue()
     raw_size = len(raw_bytes)
 
-    compressed = zlib.compress(raw_bytes)
+    compressed = lz4.frame.compress(raw_bytes)
     t_compress = time.time() - t0 - t_prune - t_save
     comp_size = len(compressed)
 
@@ -69,7 +69,7 @@ def serialize_state(inference_session: Sam3VideoInferenceSession) -> bytes:
 
 def deserialize_state(state_bytes: bytes, device: str) -> Sam3VideoInferenceSession:
     """Deserialize compressed state bytes and restore the inference session object."""
-    decompressed_bytes = zlib.decompress(state_bytes)
+    decompressed_bytes = lz4.frame.decompress(state_bytes)
 
     buffer = io.BytesIO(decompressed_bytes)
     # Load to CPU first to avoid intermediate OOM
