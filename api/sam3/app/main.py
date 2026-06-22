@@ -13,7 +13,7 @@ from transformers import (
     Sam3VideoModel,
     Sam3VideoProcessor,
 )
-from utils import decode_image, mask_to_contour
+from utils import decode_image, mask_to_contour, _move_to_device
 from caching import SessionCache, PersistenceManager, prune_session
 
 
@@ -266,6 +266,9 @@ class SAM3API(ls.LitAPI):
             )
             t_post = time.time() - t_start - t_decode - t_pre - t_model
 
+            # Move session tensors back to CPU before caching/serializing.
+            _move_to_device(session, "cpu")
+
             # Update cache and return session_id
             session_id = str(uuid.uuid4())
             self.session_cache.set(session_id, session)
@@ -323,9 +326,11 @@ class SAM3API(ls.LitAPI):
             )
             t_pre = time.time() - t_start - t_decode - t_deserialize
 
-            # Clear GPU memory and prune session before inference to limit memory growth
+            # Move session to inference device. Sessions stay on CPU between
+            # requests; this brings them to GPU just for the forward pass.
             torch.cuda.empty_cache()
             prune_session(session, keep_frames=int(request.get("prune_keep_frames", 2)))
+            _move_to_device(session, self.device)
 
             model_outputs = self.model(
                 inference_session=session,
@@ -341,6 +346,10 @@ class SAM3API(ls.LitAPI):
                 original_size=(h, w),
             )
             t_post = time.time() - t_start - t_decode - t_deserialize - t_pre - t_model
+
+            # Move session back to CPU before caching so VRAM isn't held between
+            # requests and disk-serialized sessions always have CPU tensors.
+            _move_to_device(session, "cpu")
 
             # Update cache
             t_cache_update = 0

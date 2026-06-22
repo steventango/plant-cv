@@ -10,7 +10,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 import torch
 from transformers import Sam3VideoInferenceSession
-from utils import _move_to_device
 
 
 def prune_session(session: Sam3VideoInferenceSession, keep_frames: int = 2):
@@ -72,20 +71,12 @@ def deserialize_state(state_bytes: bytes, device: str) -> Sam3VideoInferenceSess
     decompressed_bytes = lz4.frame.decompress(state_bytes)
 
     buffer = io.BytesIO(decompressed_bytes)
-    # Load to CPU first to avoid intermediate OOM
     session = torch.load(buffer, map_location="cpu", weights_only=False)
 
-    # Update inference device
+    # Keep inference_device updated so the model knows where to run computation,
+    # but leave all session tensors on CPU (matches inference_state_device="cpu"
+    # from init_state). Moving them to GPU here caused unbounded VRAM growth.
     session.inference_device = str(device)
-
-    # Move attributes to device, excluding large offloaded data
-    for k, v in session.__dict__.items():
-        if k in ["processed_frames", "video_data"]:
-            continue
-        session.__dict__[k] = _move_to_device(v, device)
-
-    if hasattr(session, "cache"):
-        session.cache = _move_to_device(session.cache, device)
 
     return session
 
