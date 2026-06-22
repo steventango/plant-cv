@@ -86,7 +86,7 @@ class PersistenceManager:
         self.persistence_dir = persistence_dir
         self.max_size = max_size
         os.makedirs(self.persistence_dir, exist_ok=True)
-        self.executor = ThreadPoolExecutor(max_workers=1)
+        self.executor = ThreadPoolExecutor(max_workers=2)
         self.saving_sessions = set()
         self.lock = threading.Lock()
 
@@ -210,12 +210,13 @@ class SessionCache:
             self.cache.move_to_end(session_id)
         self.cache[session_id] = session
 
-        if len(self.cache) > self.max_size:
-            # Force persist and evict LRU
-            oldan_id, old_session = self.cache.popitem(last=False)
-            self.persistence.save_session_async(oldan_id, old_session)
+        # Write-through: persist every update so other workers can load it on a
+        # cache miss.
+        self.persistence.save_session_async(session_id, session)
 
-            # Clean up memory
+        if len(self.cache) > self.max_size:
+            # Force evict LRU
+            oldan_id, _ = self.cache.popitem(last=False)
             if oldan_id in self.access_times:
                 del self.access_times[oldan_id]
             self.persisted_sessions.discard(oldan_id)
