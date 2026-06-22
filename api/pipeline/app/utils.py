@@ -125,36 +125,29 @@ async def async_get_embeddings(
     timeout: int = 60,
 ) -> list[dict]:
     """
-    Call Embeddings API asynchronously for a list of images.
+    Call Embeddings API with all images in a single batch request.
     """
     if not warped_images_b64:
         return []
 
     async with httpx.AsyncClient(timeout=timeout) as client:
-        tasks = []
-        for img_b64 in warped_images_b64:
-            payload = {
-                "image_data": img_b64,
-                "embedding_types": ["cls_token"],
-            }
-            tasks.append(client.post(server_url, json=payload))
+        payload = {
+            "image_data": warped_images_b64,
+            "embedding_types": ["cls_token"],
+        }
+        try:
+            resp = await client.post(server_url, json=payload)
+        except Exception as e:
+            logger.error(f"Error calling embeddings API: {e}")
+            return [{"error": str(e)}] * len(warped_images_b64)
 
-        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        if resp.status_code != 200:
+            logger.error(
+                f"Embeddings API returned status {resp.status_code}: {resp.text}"
+            )
+            return [{"error": f"Status {resp.status_code}"}] * len(warped_images_b64)
 
-        results = []
-        for i, resp in enumerate(responses):
-            if isinstance(resp, Exception):
-                logger.error(f"Error calling embeddings API for image {i}: {resp}")
-                results.append({"error": str(resp)})
-            elif resp.status_code != 200:
-                logger.error(
-                    f"Embeddings API returned status {resp.status_code} for image {i}: {resp.text}"
-                )
-                results.append({"error": f"Status {resp.status_code}"})
-            else:
-                results.append(resp.json())
-
-        return results
+        return resp.json()
 
 
 def order_masks_row_major(masks):

@@ -17,4 +17,4 @@ USER $USERNAME
 
 WORKDIR /app
 
-CMD ["uv", "run", "lightning", "deploy", "app/main.py"]
+CMD ["uv", "run", "python", "app/main.py"]
