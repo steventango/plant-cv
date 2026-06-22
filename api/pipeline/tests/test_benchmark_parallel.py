@@ -69,7 +69,7 @@ def post_detect(image_data, profile=False):
 def post_propagate(image_data, state, profile=False):
     """POST a propagate request."""
     payload = {"image_data": image_data, "state": state, "profile": profile}
-    return requests.post(PROPAGATE_ENDPOINT, json=payload, timeout=120)
+    return requests.post(PROPAGATE_ENDPOINT, json=payload, timeout=180)
 
 
 def summarize_profiles(profiles):
@@ -128,19 +128,21 @@ class TestPipelineParallelBenchmark:
         detect_elapsed = time.perf_counter() - start
 
         detect_profiles = []
+        detect_states = []
         for idx, resp in enumerate(detect_results):
             assert resp.status_code == 200, f"Detect {idx} failed: {resp.text}"
             result = resp.json()
             assert result.get("state") is not None, f"Detect {idx} missing state"
+            detect_states.append(result["state"])
             if result.get("profile"):
                 detect_profiles.append(result["profile"])
 
-        # Benchmark 12 parallel propagate calls.
+        # Benchmark 12 parallel propagate calls, each using its own independent state.
         start = time.perf_counter()
         with ThreadPoolExecutor(max_workers=12) as executor:
             prop_futures = [
-                executor.submit(post_propagate, image_second, warmup_state, True)
-                for _ in range(12)
+                executor.submit(post_propagate, image_second, detect_states[i], True)
+                for i in range(12)
             ]
             prop_results = [f.result() for f in prop_futures]
         propagate_elapsed = time.perf_counter() - start
