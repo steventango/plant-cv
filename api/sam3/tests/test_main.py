@@ -1,14 +1,35 @@
+import tempfile
+
+import cv2
+import numpy as np
 import pytest
 import requests
-import numpy as np
 from PIL import Image
-from transformers.video_utils import load_video
+
 from ..app.utils import encode_pil_image
 
 
 SAM3_ENDPOINT = "http://localhost:8805/predict"
 VIDEO_URL = "https://huggingface.co/datasets/hf-internal-testing/sam2-fixtures/resolve/main/bedroom.mp4"
 TEXT_PROMPT = "person"
+
+
+def load_video(url, max_frames=8):
+    """Load the first frames of an mp4 URL as RGB numpy arrays (no transformers dep)."""
+    resp = requests.get(url, timeout=60)
+    resp.raise_for_status()
+    with tempfile.NamedTemporaryFile(suffix=".mp4") as tmp:
+        tmp.write(resp.content)
+        tmp.flush()
+        cap = cv2.VideoCapture(tmp.name)
+        frames = []
+        while len(frames) < max_frames:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        cap.release()
+    return frames, None
 
 
 def check_service_available():
@@ -138,3 +159,11 @@ class TestSAM3API:
 
         # We expect to track at least something if detection worked
         assert len(propagated_masks) > 0
+
+        # Object IDs must stay stable across frames (tracking continuity the pipeline
+        # relies on) — the propagated IDs should overlap the detected ones.
+        detected_ids = {m["object_id"] for m in result1["masks"]}
+        propagated_ids = {m["object_id"] for m in propagated_masks}
+        assert detected_ids & propagated_ids, (
+            f"No stable IDs across frames: detect={detected_ids} prop={propagated_ids}"
+        )

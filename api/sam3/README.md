@@ -1,6 +1,10 @@
-# SAM3 Video Tracking API
+# SAM 3.1 Video Tracking API
 
-Stateless SAM3 video tracking API using LitServe.
+Stateless online video tracking API using the native `facebookresearch/sam3` package
+(SAM 3.1 Object Multiplex) and LitServe. Frames are processed one per request; tracking
+memory is held resident per session and written through to disk (`checkpoints/`) so
+sessions survive restarts. The gated `facebook/sam3.1` checkpoint downloads once at
+startup into the mounted HuggingFace cache (requires HF access).
 
 ## Running
 
@@ -11,7 +15,7 @@ docker compose up -d sam3
 
 ### Local Development
 ```bash
-uv run lightning deploy app/main.py
+uv run python app/main.py
 ```
 
 The server runs on port **8805**.
@@ -36,7 +40,7 @@ Initialize a tracking session with the first frame and a text prompt.
 **Response:**
 ```json
 {
-    "state": "base64_encoded_serialized_session_state",
+    "session_id": "uuid_of_tracking_session",
     "masks": [
         {
             "object_id": 1,
@@ -51,21 +55,21 @@ Initialize a tracking session with the first frame and a text prompt.
 
 ### 2. Propagate (Track Next Frame)
 
-Propagate tracking to the next frame using the state from the previous frame.
+Advance the tracking session by one frame using the `session_id` from a previous response.
 
 **Request:**
 ```json
 {
     "endpoint": "propagate",
     "image_data": "base64_encoded_image_string_of_next_frame",
-    "state": "base64_encoded_serialized_session_state_from_previous_response"
+    "session_id": "uuid_from_previous_response"
 }
 ```
 
 **Response:**
 ```json
 {
-    "state": "base64_encoded_serialized_session_state_updated",
+    "session_id": "uuid_of_tracking_session",
     "masks": [
         {
             "object_id": 1,

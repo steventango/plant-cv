@@ -142,7 +142,7 @@ def visualize_pipeline_tracking(
                             current_area = pot_stat.get("area", 0)
                             if area is not None:
                                 area_text = (
-                                    f"{'*' if current_area != area else ''}{area:.0f}"
+                                    f"{'*' if current_area != area else ''}{area:.1f}"
                                 )
                             else:
                                 area_text = "N/A"

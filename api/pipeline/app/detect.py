@@ -51,7 +51,9 @@ def detect():
         with timed(timings, "detect_pots_sam3"):
             _, _, _, pot_state_from_sam3, sorted_pot_masks, _ = detect_pots_sam3(image)
 
-        # For the plant SAM3 request, we want to run mask reconditioning every frame
+        # Use the same knobs as propagate so the initial detection seeds all the objects
+        # that propagation expects to track. det_nms_thresh=0.5 was too aggressive for
+        # densely packed plants — e.g. 3 pots missed on E14Z1 at frame 0 → permanent NULLs.
         with timed(timings, "sam3_plant_detect"):
             plant_result = call_sam3_api(
                 image,
@@ -62,10 +64,10 @@ def detect():
                 score_threshold_detection=0.165,
                 high_conf_thresh=0.3,
                 high_iou_thresh=0.5,
-                new_det_thresh=0.5,
-                det_nms_thresh=0.5,
-                assoc_iou_thresh=0.1,
-                trk_assoc_iou_thresh=0.5,
+                new_det_thresh=0.2,
+                det_nms_thresh=0.01,
+                assoc_iou_thresh=0.0,
+                trk_assoc_iou_thresh=0.0,
                 suppress_overlapping_based_on_recent_occlusion_threshold=1.0,
             )
         plant_state_from_sam3 = plant_result["session_id"]

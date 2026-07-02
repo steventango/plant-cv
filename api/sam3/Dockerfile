@@ -1,8 +1,17 @@
-FROM python:3.11
+FROM python:3.12
 
-RUN apt update && apt install -y ffmpeg libsm6 libxext6
+# git is needed to install the native sam3 package from its pinned git rev.
+# The package is pure-Python (no CUDA build), so the torch wheel's bundled CUDA
+# runtime is sufficient — no CUDA devel image required.
+RUN apt update && apt install -y ffmpeg libsm6 libxext6 git
 
 COPY --from=ghcr.io/astral-sh/uv:0.7.14 /uv /uvx /bin/
+
+# Use the image's Python 3.12 (which has prebuilt wheels for numpy<2 etc.) instead of
+# letting uv fetch a newer managed Python (3.13+) that would force source builds.
+ENV UV_PYTHON=3.12 \
+    UV_PYTHON_PREFERENCE=only-system \
+    UV_LINK_MODE=copy
 
 ARG USERNAME=docker
 ARG USER_UID=1000

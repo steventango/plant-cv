@@ -36,6 +36,10 @@ services:
       context: api/sam3
       dockerfile: Dockerfile
     env_file: .env
+    environment:
+      # Gated facebook/sam3.1 checkpoint downloads once into the mounted cache below.
+      # Uses the existing ~/.cache/huggingface/token; set HF_TOKEN in .env to override.
+      HF_HOME: /home/${USERNAME}/.cache/huggingface
     networks:
       - plant-network
     privileged: true
