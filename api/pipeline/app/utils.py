@@ -109,7 +109,7 @@ def call_sam3_api(
 
     session = requests.Session()
     retries = Retry(
-        total=kwargs.pop("max_retries", 5),
+        total=kwargs.pop("max_retries", 0),
         backoff_factor=kwargs.pop("backoff_factor", 1.0),
         status_forcelist=[502, 503, 504],
     )
