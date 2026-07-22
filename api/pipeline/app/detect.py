@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, request
 
 from app.pot.detect import detect_pots_sam3
 from app.utils import (
+    SAM3_DEADLINE_BUDGET_S,
     call_sam3_api,
     decode_image,
     process_pipeline_outputs,
@@ -40,6 +41,7 @@ def detect():
         profile_enabled = bool(data.get("profile"))
         timings = {} if profile_enabled else None
         request_start = time.perf_counter()
+        sam3_deadline = time.time() + SAM3_DEADLINE_BUDGET_S
 
         state_in = data.get("state", {})
         image_data = data["image_data"]
@@ -57,6 +59,7 @@ def detect():
                 image,
                 endpoint="detect",
                 text_prompt="plant",
+                deadline=sam3_deadline,
                 recondition_on_trk_masks=False,
                 recondition_every_nth_frame=1,
                 score_threshold_detection=0.165,

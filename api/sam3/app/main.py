@@ -124,6 +124,21 @@ class SAM3API(ls.LitAPI):
         return request
 
     def predict(self, request: dict):
+        # Load-shedding: if the client's deadline has already passed, skip this
+        # request without touching the session. During a CV-request storm this
+        # sheds work whose zone has already timed out, so SAM3 spends its serial
+        # capacity on requests still within their deadline and the effective
+        # queue stays short. Returning before any session load/mutation means
+        # tracking state is not advanced (equivalent to a skipped frame).
+        deadline = request.get("deadline")
+        if deadline is not None and time.time() > float(deadline):
+            print("DEBUG: skipping request past client deadline", flush=True)
+            return {
+                "skipped": True,
+                "session_id": request.get("session_id"),
+                "masks": [],
+            }
+
         gc.collect()
         if self.device == "cuda":
             torch.cuda.empty_cache()

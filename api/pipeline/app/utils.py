@@ -56,12 +56,26 @@ def decode_image(image_data: str) -> Image.Image:
     return Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
 
+# Load-shedding: the pipeline stamps each SAM3 call with a wall-clock deadline
+# (~when the originating zone's CV request budget expires) so SAM3 can drop work
+# whose client has already given up. Kept below the zone's CV_REQUEST_TIMEOUT_S
+# (45s, in plant-rl) to leave the pipeline time for post-SAM3 processing before
+# the zone times out. Pipeline and SAM3 run on the same host, so their wall
+# clocks match and the deadline is directly comparable across the HTTP boundary.
+SAM3_DEADLINE_BUDGET_S = 40
+# Safety-net timeout for a single SAM3 HTTP call. The deadline-drop above is the
+# primary backpressure mechanism; this just bounds how long the pipeline blocks
+# on a wedged/slow call (was 120s, which let requests pile up during congestion).
+SAM3_HTTP_TIMEOUT_S = 60
+
+
 def call_sam3_api(
     image: Image.Image,
     endpoint: str = "detect",
     text_prompt: str | None = None,
     state: str | None = None,
     server_url: str = "http://sam3:8805/predict",
+    deadline: float | None = None,
     **kwargs,
 ):
     """
@@ -80,7 +94,7 @@ def call_sam3_api(
             - state: Serialized state for tracking
             - masks: List of mask info dicts
     """
-    payload = {
+    payload: dict[str, object] = {
         "endpoint": endpoint,
         "image_data": encode_image(image),
     }
@@ -100,6 +114,9 @@ def call_sam3_api(
 
     payload.update(kwargs)
 
+    if deadline is not None:
+        payload["deadline"] = deadline
+
     if endpoint == "detect":
         if text_prompt:
             payload["text_prompt"] = text_prompt
@@ -114,7 +131,7 @@ def call_sam3_api(
         status_forcelist=[502, 503, 504],
     )
     session.mount("http://", HTTPAdapter(max_retries=retries))
-    response = session.post(server_url, json=payload, timeout=120)
+    response = session.post(server_url, json=payload, timeout=SAM3_HTTP_TIMEOUT_S)
     response.raise_for_status()
     return response.json()
 

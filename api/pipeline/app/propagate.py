@@ -7,6 +7,7 @@ from flask import Blueprint, jsonify, request
 from app.cv_utils import safe_fill_poly
 from app.pot.detect import filter_pot_masks
 from app.utils import (
+    SAM3_DEADLINE_BUDGET_S,
     associate_plants_to_pots,
     call_sam3_api,
     decode_image,
@@ -45,6 +46,9 @@ def propagate():
         profile_enabled = bool(data.get("profile"))
         timings = {} if profile_enabled else None
         request_start = time.perf_counter()
+        # Wall-clock deadline handed to SAM3 so it can shed this request if the
+        # zone has already given up by the time SAM3 would process it.
+        sam3_deadline = time.time() + SAM3_DEADLINE_BUDGET_S
         state_in = data.get("state", {})
 
         image_data = data["image_data"]
@@ -83,6 +87,7 @@ def propagate():
                     image,
                     endpoint="propagate",
                     state=pot_session_id,
+                    deadline=sam3_deadline,
                     **pot_params,
                 )
             with timed(timings, "filter_pot_masks"):
@@ -118,6 +123,7 @@ def propagate():
                         image,
                         endpoint="propagate",
                         state=plant_state,
+                        deadline=sam3_deadline,
                         **plant_params,
                     )
                 plant_masks = plant_result.get("masks", [])
