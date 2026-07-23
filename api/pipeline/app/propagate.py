@@ -90,6 +90,13 @@ def propagate():
                     deadline=sam3_deadline,
                     **pot_params,
                 )
+            # SAM3 shed this request (client deadline exceeded). Surface it as a
+            # failure so the caller treats it as a missed CV — the online zone
+            # stays "overdue" and retries, and the dataset records a gap rather
+            # than fake-fresh empty data. (Offline runs set no deadline, so SAM3
+            # never sheds and this path is never taken.)
+            if pot_result.get("skipped"):
+                return jsonify({"error": "cv shed: client deadline exceeded"}), 503
             with timed(timings, "filter_pot_masks"):
                 p_masks_raw_new = filter_pot_masks(
                     pot_result.get("masks", []), image_np
@@ -126,6 +133,8 @@ def propagate():
                         deadline=sam3_deadline,
                         **plant_params,
                     )
+                if plant_result.get("skipped"):
+                    return jsonify({"error": "cv shed: client deadline exceeded"}), 503
                 plant_masks = plant_result.get("masks", [])
                 plant_session_id = plant_result.get("session_id")
 

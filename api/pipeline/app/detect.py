@@ -71,6 +71,11 @@ def detect():
                 trk_assoc_iou_thresh=0.5,
                 suppress_overlapping_based_on_recent_occlusion_threshold=1.0,
             )
+        # SAM3 shed this request (client deadline exceeded) -> surface as a
+        # failure so the caller retries rather than persisting empty state.
+        # (Offline runs set no deadline and never hit this path.)
+        if plant_result.get("skipped"):
+            return jsonify({"error": "cv shed: client deadline exceeded"}), 503
         plant_state_from_sam3 = plant_result["session_id"]
         plant_masks = plant_result.get("masks", [])
 
