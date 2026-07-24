@@ -5,7 +5,7 @@ import numpy as np
 from flask import Blueprint, jsonify, request
 
 from app.cv_utils import safe_fill_poly
-from app.pot.detect import filter_pot_masks
+from app.pot.detect import POT_INFERENCE_HEIGHT, filter_pot_masks
 from app.utils import (
     SAM3_DEADLINE_BUDGET_S,
     associate_plants_to_pots,
@@ -72,7 +72,10 @@ def propagate():
 
             # --- POT TRACKING ---
             # Forward extra SAM3 params from request (overriding defaults if provided)
-            pot_params = {"score_threshold_detection": 0.15}
+            pot_params = {
+                "score_threshold_detection": 0.15,
+                "inference_height": POT_INFERENCE_HEIGHT,
+            }
             for k, v in data.items():
                 if k not in [
                     "image_data",

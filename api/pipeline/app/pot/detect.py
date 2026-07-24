@@ -7,6 +7,8 @@ from app.utils import call_sam3_api
 
 logger = logging.getLogger(__name__)
 
+POT_INFERENCE_HEIGHT = 672
+
 
 def filter_by_areas(
     boxes, areas, image_np, confidences=None, stats_conf_threshold=0.03
@@ -225,6 +227,7 @@ def detect_pots_sam3(image, state=None, extra_prompts=None, **kwargs):
 
     if "score_threshold_detection" not in kwargs:
         kwargs["score_threshold_detection"] = 0.15
+    kwargs.setdefault("inference_height", POT_INFERENCE_HEIGHT)
 
     # Determine endpoint based on whether we have previous state
     if state is None:

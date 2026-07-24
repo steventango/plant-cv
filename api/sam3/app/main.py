@@ -17,6 +17,11 @@ from utils import decode_image, mask_to_contour, _move_to_device
 from caching import SessionCache, PersistenceManager, prune_session
 
 
+PATCH_SIZE = 14
+DEFAULT_INFERENCE_HEIGHT = 1008
+MAX_RESOLUTIONS = 4
+
+
 def process_outputs(
     processor: Sam3VideoProcessor,
     session: Sam3VideoInferenceSession,
@@ -105,14 +110,14 @@ class SAM3API(ls.LitAPI):
             torch.backends.cudnn.allow_tf32 = True
 
         # Load SAM3 Video Model
-        self.config = Sam3VideoConfig.from_pretrained("facebook/sam3")
-        self.model = Sam3VideoModel.from_pretrained(
-            "facebook/sam3", config=self.config
-        ).to(device, dtype=torch.bfloat16)
+        config = Sam3VideoConfig.from_pretrained("facebook/sam3")
+        self.model = Sam3VideoModel.from_pretrained("facebook/sam3", config=config).to(
+            device, dtype=torch.bfloat16
+        )
         self.processor = Sam3VideoProcessor.from_pretrained("facebook/sam3")
 
-        # Inference resolution setting
-        self.inference_height = 1008
+        # Model per inference resolution, all sharing the base model's weights.
+        self.models = {DEFAULT_INFERENCE_HEIGHT: self.model}
 
         # Initialize session cache
         self.persistence = PersistenceManager(persistence_dir="checkpoints")
@@ -154,65 +159,95 @@ class SAM3API(ls.LitAPI):
         else:
             return {"error": f"Unknown endpoint: {endpoint}"}
 
-    def _update_config(self, request: dict):
-        self.model.score_threshold_detection = float(
+    def _model_for(self, height) -> Sam3VideoModel:
+        height = int(height)
+        if height in self.models:
+            return self.models[height]
+
+        if height % (2 * PATCH_SIZE):
+            raise ValueError(
+                f"inference_height must be a multiple of {2 * PATCH_SIZE} (patch size "
+                f"{PATCH_SIZE}), got {height}"
+            )
+        if len(self.models) >= MAX_RESOLUTIONS:
+            raise ValueError(
+                f"already serving {sorted(self.models)}; refusing to build a model for "
+                f"{height} as well (MAX_RESOLUTIONS={MAX_RESOLUTIONS})"
+            )
+
+        t0 = time.time()
+        config = Sam3VideoConfig.from_pretrained("facebook/sam3")
+        config.image_size = height
+        config.low_res_mask_size = 4 * height // PATCH_SIZE
+
+        model = Sam3VideoModel(config)
+        model.load_state_dict(self.model.state_dict(), assign=True)
+        self.models[height] = model.to(self.device, dtype=torch.bfloat16).eval()
+        print(
+            f"DEBUG: built SAM3 model for {height}x{height} in {time.time() - t0:.2f}s",
+            flush=True,
+        )
+        return self.models[height]
+
+    def _update_config(self, model: Sam3VideoModel, request: dict):
+        model.score_threshold_detection = float(
             request.get(
-                "score_threshold_detection", self.config.score_threshold_detection
+                "score_threshold_detection", model.config.score_threshold_detection
             )
         )
-        self.model.new_det_thresh = float(
-            request.get("new_det_thresh", self.config.new_det_thresh)
+        model.new_det_thresh = float(
+            request.get("new_det_thresh", model.config.new_det_thresh)
         )
-        self.model.high_conf_thresh = float(
-            request.get("high_conf_thresh", self.config.high_conf_thresh)
+        model.high_conf_thresh = float(
+            request.get("high_conf_thresh", model.config.high_conf_thresh)
         )
-        self.model.high_iou_thresh = float(
-            request.get("high_iou_thresh", self.config.high_iou_thresh)
+        model.high_iou_thresh = float(
+            request.get("high_iou_thresh", model.config.high_iou_thresh)
         )
-        self.model.recondition_every_nth_frame = int(
+        model.recondition_every_nth_frame = int(
             request.get(
-                "recondition_every_nth_frame", self.config.recondition_every_nth_frame
+                "recondition_every_nth_frame", model.config.recondition_every_nth_frame
             )
         )
-        self.model.max_num_objects = int(
-            request.get("max_num_objects", self.config.max_num_objects)
+        model.max_num_objects = int(
+            request.get("max_num_objects", model.config.max_num_objects)
         )
-        self.model.recondition_on_trk_masks = bool(
+        model.recondition_on_trk_masks = bool(
             request.get(
-                "recondition_on_trk_masks", self.config.recondition_on_trk_masks
+                "recondition_on_trk_masks", model.config.recondition_on_trk_masks
             )
         )
-        self.model.det_nms_thresh = float(
-            request.get("det_nms_thresh", self.config.det_nms_thresh)
+        model.det_nms_thresh = float(
+            request.get("det_nms_thresh", model.config.det_nms_thresh)
         )
-        self.model.assoc_iou_thresh = float(
-            request.get("assoc_iou_thresh", self.config.assoc_iou_thresh)
+        model.assoc_iou_thresh = float(
+            request.get("assoc_iou_thresh", model.config.assoc_iou_thresh)
         )
-        self.model.trk_assoc_iou_thresh = float(
-            request.get("trk_assoc_iou_thresh", self.config.trk_assoc_iou_thresh)
+        model.trk_assoc_iou_thresh = float(
+            request.get("trk_assoc_iou_thresh", model.config.trk_assoc_iou_thresh)
         )
-        self.model.init_trk_keep_alive = int(
-            request.get("init_trk_keep_alive", self.config.init_trk_keep_alive)
+        model.init_trk_keep_alive = int(
+            request.get("init_trk_keep_alive", model.config.init_trk_keep_alive)
         )
-        self.model.max_trk_keep_alive = int(
-            request.get("max_trk_keep_alive", self.config.max_trk_keep_alive)
+        model.max_trk_keep_alive = int(
+            request.get("max_trk_keep_alive", model.config.max_trk_keep_alive)
         )
-        self.model.min_trk_keep_alive = int(
-            request.get("min_trk_keep_alive", self.config.min_trk_keep_alive)
+        model.min_trk_keep_alive = int(
+            request.get("min_trk_keep_alive", model.config.min_trk_keep_alive)
         )
-        self.model.fill_hole_area = int(
-            request.get("fill_hole_area", self.config.fill_hole_area)
+        model.fill_hole_area = int(
+            request.get("fill_hole_area", model.config.fill_hole_area)
         )
-        self.model.low_res_mask_size = int(
-            request.get("low_res_mask_size", self.config.low_res_mask_size)
+        model.low_res_mask_size = int(
+            request.get("low_res_mask_size", model.config.low_res_mask_size)
         )
-        self.model.hotstart_delay = int(
-            request.get("hotstart_delay", self.config.hotstart_delay)
+        model.hotstart_delay = int(
+            request.get("hotstart_delay", model.config.hotstart_delay)
         )
-        self.model.suppress_overlapping_based_on_recent_occlusion_threshold = float(
+        model.suppress_overlapping_based_on_recent_occlusion_threshold = float(
             request.get(
                 "suppress_overlapping_based_on_recent_occlusion_threshold",
-                self.config.suppress_overlapping_based_on_recent_occlusion_threshold,
+                model.config.suppress_overlapping_based_on_recent_occlusion_threshold,
             )
         )
 
@@ -225,7 +260,11 @@ class SAM3API(ls.LitAPI):
         if not text_prompt:
             return {"error": "text_prompt is required for detect"}
 
-        self._update_config(request)
+        model = self._model_for(
+            request.get("inference_height") or DEFAULT_INFERENCE_HEIGHT
+        )
+        inference_height = model.config.image_size
+        self._update_config(model, request)
 
         image_np = decode_image(image_data)
         h, w = image_np.shape[:2]
@@ -252,21 +291,20 @@ class SAM3API(ls.LitAPI):
                 text=text_prompt,
             )
 
-            # Process first frame - resize for memory efficiency
-            inference_width = int(w * (self.inference_height / h))
-            image_resized = cv2.resize(
-                image_np, (inference_width, self.inference_height)
-            )
-
+            # This pre-resize does not change the shape the model sees, but the
+            # resample perturbs pixels slightly so we are keeping it for now.
+            inference_width = int(w * (inference_height / h))
+            image_resized = cv2.resize(image_np, (inference_width, inference_height))
             inputs = self.processor(
                 images=image_resized,
+                size={"height": inference_height, "width": inference_height},
                 device=self.device,
                 return_tensors="pt",
             )
             t_pre = time.time() - t_start - t_decode
 
             # Run inference
-            model_outputs = self.model(
+            model_outputs = model(
                 inference_session=session,
                 frame=inputs.pixel_values[0],
             )
@@ -276,13 +314,15 @@ class SAM3API(ls.LitAPI):
                 self.processor,
                 session,
                 model_outputs,
-                inference_size=(self.inference_height, inference_width),
+                inference_size=(inference_height, inference_width),
                 original_size=(h, w),
             )
             t_post = time.time() - t_start - t_decode - t_pre - t_model
 
             # Move session tensors back to CPU before caching/serializing.
             _move_to_device(session, "cpu")
+
+            session.plantcv_inference_height = inference_height
 
             # Update cache and return session_id
             session_id = str(uuid.uuid4())
@@ -309,8 +349,6 @@ class SAM3API(ls.LitAPI):
         image_data = request["image_data"]
         session_id = request["session_id"]
 
-        self._update_config(request)
-
         image_np = decode_image(image_data)
         h, w = image_np.shape[:2]
         t_decode = time.time() - t_start
@@ -328,14 +366,17 @@ class SAM3API(ls.LitAPI):
                 return {"error": "Session expired or not found in cache"}
             t_deserialize = time.time() - t_start - t_decode
 
-            # Resize frame
-            inference_width = int(w * (self.inference_height / h))
-            image_resized = cv2.resize(
-                image_np, (inference_width, self.inference_height)
+            model = self._model_for(
+                getattr(session, "plantcv_inference_height", DEFAULT_INFERENCE_HEIGHT)
             )
+            inference_height = model.config.image_size
+            self._update_config(model, request)
 
+            inference_width = int(w * (inference_height / h))
+            image_resized = cv2.resize(image_np, (inference_width, inference_height))
             inputs = self.processor(
                 images=image_resized,
+                size={"height": inference_height, "width": inference_height},
                 device=self.device,
                 return_tensors="pt",
             )
@@ -347,7 +388,7 @@ class SAM3API(ls.LitAPI):
             prune_session(session, keep_frames=int(request.get("prune_keep_frames", 2)))
             _move_to_device(session, self.device)
 
-            model_outputs = self.model(
+            model_outputs = model(
                 inference_session=session,
                 frame=inputs.pixel_values[0],
             )
@@ -357,7 +398,7 @@ class SAM3API(ls.LitAPI):
                 self.processor,
                 session,
                 model_outputs,
-                inference_size=(self.inference_height, inference_width),
+                inference_size=(inference_height, inference_width),
                 original_size=(h, w),
             )
             t_post = time.time() - t_start - t_decode - t_deserialize - t_pre - t_model
