@@ -5,6 +5,7 @@ import numpy as np
 from flask import Blueprint, jsonify, request
 
 from app.cv_utils import safe_fill_poly
+from app.detect import CVShed, run_detect
 from app.pot.detect import POT_INFERENCE_HEIGHT, filter_pot_masks
 from app.utils import (
     SAM3_DEADLINE_BUDGET_S,
@@ -19,6 +20,58 @@ from app.utils import (
 logger = logging.getLogger(__name__)
 
 propagate_blueprint = Blueprint("propagate", __name__, url_prefix="/pipeline")
+
+
+def _session_lost(result):
+    """True if SAM3 could not propagate because the session is gone.
+
+    SAM3 reports this in a 200 response body, so it would otherwise read as a
+    frame with nothing in it: pots would silently fall back to their stale masks
+    and plant_state would be dropped, leaving the caller tracking a dead session
+    forever.
+    """
+    return bool(result.get("error"))
+
+
+def _recover_by_detect(
+    image,
+    reason,
+    cleaning_state,
+    sam3_deadline,
+    timings,
+    request_start,
+    debug_raw_plants,
+):
+    """Re-establish tracking by running detection on the current frame.
+
+    Pots get their stable IDs from row-major order, the same way the first frame
+    assigns them, so identities line up again as long as the same pots are found.
+    Plant IDs are reissued, which downstream already tolerates: associations are
+    recomputed per frame and stat-cleaning history is keyed by pot ID.
+    """
+    logger.warning(f"SAM3 session lost ({reason}); re-running detect to recover")
+    try:
+        response = run_detect(
+            image,
+            cleaning_state=cleaning_state,
+            sam3_deadline=sam3_deadline,
+            timings=timings,
+            debug_raw_plants=debug_raw_plants,
+        )
+    except CVShed as e:
+        # Recovery itself was shed; stay overdue so the caller retries rather
+        # than persisting a state built from a dead session.
+        return jsonify({"error": str(e)}), 503
+
+    response["recovered_by_detect"] = True
+    if timings is not None:
+        timings["total"] = time.perf_counter() - request_start
+        response["profile"] = timings
+    logger.info(
+        f"recovered by detect: pot_masks={len(response['pot_masks'])}, "
+        f"ordered_pot_ids={len(response['ordered_pot_ids'])}"
+    )
+    return jsonify(response)
 
 
 @propagate_blueprint.route("/propagate", methods=["POST"])
@@ -100,6 +153,19 @@ def propagate():
             # never sheds and this path is never taken.)
             if pot_result.get("skipped"):
                 return jsonify({"error": "cv shed: client deadline exceeded"}), 503
+            # SAM3 lost the pot session (evicted from its cache, or the service
+            # restarted). Tracking cannot continue from it, so rebuild both
+            # sessions by detecting on this frame.
+            if _session_lost(pot_result):
+                return _recover_by_detect(
+                    image,
+                    reason=f"pot session: {pot_result.get('error')}",
+                    cleaning_state=cleaning_state,
+                    sam3_deadline=sam3_deadline,
+                    timings=timings,
+                    request_start=request_start,
+                    debug_raw_plants=bool(data.get("debug_raw_plants")),
+                )
             with timed(timings, "filter_pot_masks"):
                 p_masks_raw_new = filter_pot_masks(
                     pot_result.get("masks", []), image_np
@@ -138,6 +204,16 @@ def propagate():
                     )
                 if plant_result.get("skipped"):
                     return jsonify({"error": "cv shed: client deadline exceeded"}), 503
+                if _session_lost(plant_result):
+                    return _recover_by_detect(
+                        image,
+                        reason=f"plant session: {plant_result.get('error')}",
+                        cleaning_state=cleaning_state,
+                        sam3_deadline=sam3_deadline,
+                        timings=timings,
+                        request_start=request_start,
+                        debug_raw_plants=bool(data.get("debug_raw_plants")),
+                    )
                 plant_masks = plant_result.get("masks", [])
                 plant_session_id = plant_result.get("session_id")
 

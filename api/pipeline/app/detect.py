@@ -18,6 +18,76 @@ logger = logging.getLogger(__name__)
 detect_blueprint = Blueprint("detect", __name__, url_prefix="/pipeline")
 
 
+class CVShed(Exception):
+    """SAM3 shed a request because the caller's deadline had already passed."""
+
+
+def run_detect(
+    image,
+    cleaning_state=None,
+    sam3_deadline=None,
+    timings=None,
+    debug_raw_plants=False,
+):
+    """Detect pots and plants from scratch and build the pipeline response.
+
+    Used by the /detect endpoint and by /propagate when SAM3 has lost a session
+    and tracking has to be re-established from the current frame.
+
+    Raises CVShed if SAM3 shed the request.
+    """
+    with timed(timings, "detect_pots_sam3"):
+        _, _, _, pot_state_from_sam3, sorted_pot_masks, _ = detect_pots_sam3(image)
+
+    # For the plant SAM3 request, we want to run mask reconditioning every frame
+    with timed(timings, "sam3_plant_detect"):
+        plant_result = call_sam3_api(
+            image,
+            endpoint="detect",
+            text_prompt="plant",
+            deadline=sam3_deadline,
+            recondition_on_trk_masks=False,
+            recondition_every_nth_frame=1,
+            score_threshold_detection=0.165,
+            high_conf_thresh=0.3,
+            high_iou_thresh=0.5,
+            new_det_thresh=0.5,
+            det_nms_thresh=0.5,
+            assoc_iou_thresh=0.1,
+            trk_assoc_iou_thresh=0.5,
+            suppress_overlapping_based_on_recent_occlusion_threshold=1.0,
+        )
+    # SAM3 shed this request (client deadline exceeded) -> surface as a
+    # failure so the caller retries rather than persisting empty state.
+    # (Offline runs set no deadline and never hit this path.)
+    if plant_result.get("skipped"):
+        raise CVShed("cv shed: client deadline exceeded")
+    plant_state_from_sam3 = plant_result["session_id"]
+    plant_masks = plant_result.get("masks", [])
+
+    # Process all outputs using the shared utility
+    response = process_pipeline_outputs(
+        np.array(image),
+        plant_masks,
+        sorted_pot_masks,
+        sam3_session_id=pot_state_from_sam3,
+        cleaning_state=cleaning_state,
+        profile=timings,
+    )
+    response["state"]["plant_state"] = plant_state_from_sam3
+    if debug_raw_plants:
+        response["debug_raw_plant_masks"] = [
+            {
+                "object_id": m.get("object_id"),
+                "box": m.get("box"),
+                "score": m.get("score"),
+                "contour": m.get("contour"),
+            }
+            for m in plant_masks
+        ]
+    return response
+
+
 @detect_blueprint.route("/detect", methods=["POST"])
 def detect():
     """
@@ -48,61 +118,20 @@ def detect():
         with timed(timings, "decode_image"):
             image = decode_image(image_data)
 
-        cleaning_state = state_in.get("cleaning_state")
-
-        with timed(timings, "detect_pots_sam3"):
-            _, _, _, pot_state_from_sam3, sorted_pot_masks, _ = detect_pots_sam3(image)
-
-        # For the plant SAM3 request, we want to run mask reconditioning every frame
-        with timed(timings, "sam3_plant_detect"):
-            plant_result = call_sam3_api(
+        try:
+            response = run_detect(
                 image,
-                endpoint="detect",
-                text_prompt="plant",
-                deadline=sam3_deadline,
-                recondition_on_trk_masks=False,
-                recondition_every_nth_frame=1,
-                score_threshold_detection=0.165,
-                high_conf_thresh=0.3,
-                high_iou_thresh=0.5,
-                new_det_thresh=0.5,
-                det_nms_thresh=0.5,
-                assoc_iou_thresh=0.1,
-                trk_assoc_iou_thresh=0.5,
-                suppress_overlapping_based_on_recent_occlusion_threshold=1.0,
+                cleaning_state=state_in.get("cleaning_state"),
+                sam3_deadline=sam3_deadline,
+                timings=timings,
+                debug_raw_plants=bool(data.get("debug_raw_plants")),
             )
-        # SAM3 shed this request (client deadline exceeded) -> surface as a
-        # failure so the caller retries rather than persisting empty state.
-        # (Offline runs set no deadline and never hit this path.)
-        if plant_result.get("skipped"):
-            return jsonify({"error": "cv shed: client deadline exceeded"}), 503
-        plant_state_from_sam3 = plant_result["session_id"]
-        plant_masks = plant_result.get("masks", [])
+        except CVShed as e:
+            return jsonify({"error": str(e)}), 503
 
-        # Process all outputs using the shared utility
-        response = process_pipeline_outputs(
-            np.array(image),
-            plant_masks,
-            sorted_pot_masks,
-            sam3_session_id=pot_state_from_sam3,
-            cleaning_state=cleaning_state,
-            profile=timings,
-        )
         if timings is not None:
             timings["total"] = time.perf_counter() - request_start
-        response["state"]["plant_state"] = plant_state_from_sam3
-        if timings is not None:
             response["profile"] = timings
-        if data.get("debug_raw_plants"):
-            response["debug_raw_plant_masks"] = [
-                {
-                    "object_id": m.get("object_id"),
-                    "box": m.get("box"),
-                    "score": m.get("score"),
-                    "contour": m.get("contour"),
-                }
-                for m in plant_masks
-            ]
 
         logger.info(
             f"detect: pot_masks={len(response['pot_masks'])}, ordered_pot_ids={len(response['ordered_pot_ids'])}"
