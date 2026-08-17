@@ -12,12 +12,66 @@ import torch
 from transformers import Sam3VideoInferenceSession
 
 
+# SAM3 reads at most `max_cond_frame_num` (4) conditioning frames and the last
+# `num_maskmem - 1` (6) non-conditioning frames per object. Keep a margin over both.
+KEEP_COND_FRAMES = 11
+KEEP_NON_COND_FRAMES = 7
+
+
+def shrink_output_dicts(session: Sam3VideoInferenceSession) -> None:
+    """Bound `output_dict_per_obj`, which holds ~98% of a session's bytes.
+
+    Transformers never evicts from it: reconditioning promotes an entry into
+    `cond_frame_outputs` every frame and nothing removes it, so a long-lived
+    session grows without bound even though the model only ever reads the few
+    most recent frames. Each retained entry also carries two payloads it does not
+    need to: a full-resolution `high_res_masks` that the memory encoder already
+    distilled into `maskmem_features` on the frame that produced it, and a private
+    copy of `maskmem_pos_enc`, which is identical for every entry because it only
+    encodes spatial position.
+
+    Sessions are moved host<->device and garbage-collected on every request, so
+    their size is paid per frame, not just once.
+    """
+    canonical_pos_enc = {}
+
+    for per_obj in (getattr(session, "output_dict_per_obj", None) or {}).values():
+        for storage_key, keep in (
+            ("cond_frame_outputs", KEEP_COND_FRAMES),
+            ("non_cond_frame_outputs", KEEP_NON_COND_FRAMES),
+        ):
+            entries = per_obj.get(storage_key)
+            if not entries:
+                continue
+
+            # Streaming only ever moves forward, so "closest to the current frame"
+            # is the same as "most recent".
+            for stale_idx in sorted(entries.keys())[:-keep]:
+                del entries[stale_idx]
+
+            for entry in entries.values():
+                if not isinstance(entry, dict):
+                    continue
+                # Only drop the mask once the memory encoder has consumed it.
+                if entry.get("maskmem_features") is not None:
+                    entry.pop("high_res_masks", None)
+                pos_enc = entry.get("maskmem_pos_enc")
+                if pos_enc is not None:
+                    entry["maskmem_pos_enc"] = canonical_pos_enc.setdefault(
+                        tuple(pos_enc.shape), pos_enc
+                    )
+
+
 def prune_session(session: Sam3VideoInferenceSession, keep_frames: int = 2):
     """
     Prune session state to keep it small, only keeping the most recent frames and features.
     """
     if not hasattr(session, "processed_frames"):
         return
+
+    # Runs before the early return below: `processed_frames` is usually already
+    # short, but `output_dict_per_obj` is what actually grows.
+    shrink_output_dicts(session)
 
     all_frame_indices = sorted(session.processed_frames.keys())
     if len(all_frame_indices) <= keep_frames:
