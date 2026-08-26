@@ -1,4 +1,3 @@
-import gc
 import time
 import uuid
 from contextlib import nullcontext
@@ -143,10 +142,6 @@ class SAM3API(ls.LitAPI):
                 "session_id": request.get("session_id"),
                 "masks": [],
             }
-
-        gc.collect()
-        if self.device == "cuda":
-            torch.cuda.empty_cache()
 
         endpoint = request.get("endpoint", "detect")
 
@@ -332,9 +327,6 @@ class SAM3API(ls.LitAPI):
             results = {"session_id": session_id, **processed_results}
             del model_outputs, inputs
 
-        gc.collect()
-        torch.cuda.empty_cache()
-
         t_total = time.time() - t_start
         print(
             f"TIMING: detect total {t_total:.4f}s (decode:{t_decode:.4f}, pre:{t_pre:.4f}, model:{t_model:.4f}, post:{t_post:.4f}, serialize:{t_serialize:.4f})",
@@ -382,16 +374,23 @@ class SAM3API(ls.LitAPI):
             )
             t_pre = time.time() - t_start - t_decode - t_deserialize
 
-            # Move session to inference device. Sessions stay on CPU between
-            # requests; this brings them to GPU just for the forward pass.
-            torch.cuda.empty_cache()
+            # Sessions stay on CPU between requests; bring them to GPU just for
+            # the forward pass.
+            t0 = time.time()
             prune_session(session, keep_frames=int(request.get("prune_keep_frames", 2)))
+            t_prune = time.time() - t0
+            t0 = time.time()
             _move_to_device(session, self.device)
+            t_h2d = time.time() - t0
 
+            t0 = time.time()
             model_outputs = model(
                 inference_session=session,
                 frame=inputs.pixel_values[0],
             )
+            if self.device == "cuda":
+                torch.cuda.synchronize()
+            t_fwd = time.time() - t0
             t_model = time.time() - t_start - t_decode - t_deserialize - t_pre
 
             processed_results = process_outputs(
@@ -405,7 +404,9 @@ class SAM3API(ls.LitAPI):
 
             # Move session back to CPU before caching so VRAM isn't held between
             # requests and disk-serialized sessions always have CPU tensors.
+            t0 = time.time()
             _move_to_device(session, "cpu")
+            t_d2h = time.time() - t0
 
             # Update cache
             t_cache_update = 0
@@ -416,12 +417,9 @@ class SAM3API(ls.LitAPI):
             results = {"session_id": session_id, **processed_results}
             del model_outputs, inputs
 
-        gc.collect()
-        torch.cuda.empty_cache()
-
         t_total = time.time() - t_start
         print(
-            f"TIMING: propagate total {t_total:.4f}s (decode:{t_decode:.4f}, deserialize:{t_deserialize:.4f}, pre:{t_pre:.4f}, model:{t_model:.4f}, post:{t_post:.4f}, cache_update:{t_cache_update:.4f})",
+            f"TIMING: propagate total {t_total:.4f}s (decode:{t_decode:.4f}, deserialize:{t_deserialize:.4f}, pre:{t_pre:.4f}, prune:{t_prune:.4f}, h2d:{t_h2d:.4f}, forward:{t_fwd:.4f}, post:{t_post:.4f}, d2h:{t_d2h:.4f}, cache_update:{t_cache_update:.4f})",
             flush=True,
         )
 
