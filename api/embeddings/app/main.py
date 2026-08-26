@@ -56,8 +56,8 @@ class EmbeddingsAPI(ls.LitAPI):
             if self.device == "cuda"
             else nullcontext(),
         ):
-            processor_inputs = self.processor(images=images, return_tensors="pt").to(
-                self.device
+            processor_inputs = self.processor(
+                images=images, return_tensors="pt", device=self.device
             )
             outputs = self.model(**processor_inputs)
 
