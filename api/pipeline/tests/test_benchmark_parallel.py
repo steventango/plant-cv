@@ -25,6 +25,7 @@ def get_service_url():
 PIPELINE_BASE_URL = get_service_url()
 DETECT_ENDPOINT = f"{PIPELINE_BASE_URL}/detect"
 PROPAGATE_ENDPOINT = f"{PIPELINE_BASE_URL}/propagate"
+NUM_CHAMBERS = 11
 
 
 def check_service_available():
@@ -109,13 +110,16 @@ class TestPipelineParallelBenchmark:
         # Warm-up detect to load models / sessions.
         warmup_resp = post_detect(encoded[0])
         assert warmup_resp.status_code == 200, warmup_resp.text
-        assert warmup_resp.json().get("state") is not None, "Warm-up detect missing state"
+        assert warmup_resp.json().get("state") is not None, (
+            "Warm-up detect missing state"
+        )
 
-        # Benchmark 12 parallel detect calls on the first frame.
+        # Benchmark parallel detect calls on the first frame.
         start = time.perf_counter()
-        with ThreadPoolExecutor(max_workers=12) as executor:
+        with ThreadPoolExecutor(max_workers=NUM_CHAMBERS) as executor:
             detect_futures = [
-                executor.submit(post_detect, encoded[0], True) for _ in range(12)
+                executor.submit(post_detect, encoded[0], True)
+                for _ in range(NUM_CHAMBERS)
             ]
             detect_results = [f.result() for f in detect_futures]
         detect_elapsed = time.perf_counter() - start
@@ -130,7 +134,7 @@ class TestPipelineParallelBenchmark:
             if result.get("profile"):
                 detect_profiles.append(result["profile"])
 
-        print(f"Parallel detect (12 calls, {frames[0].name}): {detect_elapsed:.2f}s")
+        print(f"Parallel detect ({frames[0].name}): {detect_elapsed:.2f}s")
         print("Target (eventual): both <= 30s")
         if detect_profiles:
             detect_summary = summarize_profiles(detect_profiles)
@@ -138,15 +142,17 @@ class TestPipelineParallelBenchmark:
             for key in sorted(detect_summary.keys()):
                 print(f"  {key}: {detect_summary[key]:.3f}")
 
-        # Each later frame: 12 chambers propagate in parallel, then keep their states.
+        # Each later frame: chambers propagate in parallel, then keep their states.
         all_propagate_profiles = []
         propagate_walls = []
         for step, frame in enumerate(frames[1:], start=1):
             start = time.perf_counter()
-            with ThreadPoolExecutor(max_workers=12) as executor:
+            with ThreadPoolExecutor(max_workers=NUM_CHAMBERS) as executor:
                 prop_futures = [
-                    executor.submit(post_propagate, encoded[step], chamber_states[i], True)
-                    for i in range(12)
+                    executor.submit(
+                        post_propagate, encoded[step], chamber_states[i], True
+                    )
+                    for i in range(NUM_CHAMBERS)
                 ]
                 prop_results = [f.result() for f in prop_futures]
             elapsed = time.perf_counter() - start
@@ -174,13 +180,13 @@ class TestPipelineParallelBenchmark:
                 plant = summary.get("sam3_plant_propagate")
             plant_s = f" plant={plant:.2f}s" if plant is not None else ""
             print(
-                f"Parallel propagate (12 calls, step {step}/{len(frames)-1} "
+                f"Parallel propagate (12 calls, step {step}/{len(frames) - 1} "
                 f"{frame.name}): {elapsed:.2f}s{plant_s}"
             )
 
         print(
             f"Propagate walls over {len(propagate_walls)} E14Z1 frames: "
-            f"min={min(propagate_walls):.2f}s mean={sum(propagate_walls)/len(propagate_walls):.2f}s "
+            f"min={min(propagate_walls):.2f}s mean={sum(propagate_walls) / len(propagate_walls):.2f}s "
             f"max={max(propagate_walls):.2f}s"
         )
         if all_propagate_profiles:
